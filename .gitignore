@@ -28,6 +28,7 @@ _testmain.go
 
 # local configuration file
 *.code-workspace
+*.idea
 
 #snd files
 *.aiff
