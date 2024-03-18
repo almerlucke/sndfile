@@ -1,0 +1,4 @@
+github.com/almerlucke/genny v0.0.0-20240313133937-a04813c86ae3 h1:WtNF9dQP1mEwQKxpzb0heo0+bw7Nw48G1v0zhheacS8=
+github.com/almerlucke/genny v0.0.0-20240313133937-a04813c86ae3/go.mod h1:mqCoaqgKR37O2D3ZUOyutbjBATasLJT6hOGDkVX+jj0=
+github.com/dh1tw/gosamplerate v0.1.2 h1:oyqtZk67xB9B4l+vIZCZ3F0RYV/z66W58VOah11/ktI=
+github.com/dh1tw/gosamplerate v0.1.2/go.mod h1:zooTyHpoR7hE+FLfdE3yjLHb2QA2NpMusNfuaZqEACM=
