@@ -5,6 +5,7 @@ import (
 	"github.com/almerlucke/sndfile/writer/backend"
 	"github.com/almerlucke/sndfile/writer/backend/aifc"
 	"github.com/dh1tw/gosamplerate"
+	"log"
 )
 
 type FileFormat int
@@ -81,6 +82,11 @@ func NewWithBackend(be backend.Backend, numChannels int, sampleRate float64, opt
 
 		w.srConv = srConv
 		w.srRatio = sampleRate / opt.InputSampleRate
+
+		err = w.srConv.SetRatio(w.srRatio)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return w, nil
@@ -106,6 +112,7 @@ func (wr *Writer) Write(input any, endOfInput bool) error {
 		if err != nil {
 			return err
 		}
+		log.Printf("convert samplerate")
 	}
 
 	if len(output) > 0 {
