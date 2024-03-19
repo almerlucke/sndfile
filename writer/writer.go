@@ -4,8 +4,8 @@ import (
 	"errors"
 	"github.com/almerlucke/sndfile/writer/backend"
 	"github.com/almerlucke/sndfile/writer/backend/aifc"
+	"github.com/almerlucke/sndfile/writer/backend/wav"
 	"github.com/dh1tw/gosamplerate"
-	"log"
 )
 
 type FileFormat int
@@ -49,6 +49,11 @@ func NewWithOptions(filePath string, fileFormat FileFormat, numChannels int, sam
 	switch fileFormat {
 	case AIFC:
 		be, err = aifc.New(filePath, numChannels, sampleRate)
+		if err != nil {
+			return nil, err
+		}
+	case WAV:
+		be, err = wav.New(filePath, numChannels, sampleRate)
 		if err != nil {
 			return nil, err
 		}
@@ -112,7 +117,6 @@ func (wr *Writer) Write(input any, endOfInput bool) error {
 		if err != nil {
 			return err
 		}
-		log.Printf("convert samplerate")
 	}
 
 	if len(output) > 0 {
@@ -126,17 +130,31 @@ func (wr *Writer) Write(input any, endOfInput bool) error {
 }
 
 func (wr *Writer) Close() error {
+	var errs []error
 	var err error
 
 	if wr.opt.Normalize {
 		err = wr.backend.Normalize(wr.max)
+		if err != nil {
+			errs = append(errs, err)
+		}
 	}
 
 	if wr.opt.ConvertSampleRate {
-		_ = gosamplerate.Delete(wr.srConv)
+		err = gosamplerate.Delete(wr.srConv)
+		if err != nil {
+			errs = append(errs, err)
+		}
 	}
 
-	_ = wr.backend.Close()
+	err = wr.backend.Close()
+	if err != nil {
+		errs = append(errs, err)
+	}
 
-	return err
+	if len(errs) != 0 {
+		return errors.Join(errs...)
+	}
+
+	return nil
 }

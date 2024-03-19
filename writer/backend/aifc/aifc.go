@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
-	"fmt"
+	"errors"
 	"github.com/almerlucke/sndfile/writer/backend/aifc/float80"
 	"io"
 	"os"
@@ -25,10 +25,6 @@ func toPascalBytes(str string) []byte {
 		ps[i+1] = byte(c)
 	}
 	return ps
-}
-
-type float interface {
-	float32 | float64
 }
 
 type AIFC struct {
@@ -60,17 +56,21 @@ func New(filePath string, numChannels int, sampleRate float64) (*AIFC, error) {
 }
 
 func (aifc *AIFC) Close() error {
-	updateErr := aifc.updateSizes()
-	closeErr := aifc.file.Close()
+	var errs []error
+	var err error
 
-	if updateErr != nil {
-		if closeErr != nil {
-			return fmt.Errorf("update err: %w, close err: %w", updateErr, closeErr)
-		}
+	err = aifc.updateSizes()
+	if err != nil {
+		errs = append(errs, err)
+	}
 
-		return fmt.Errorf("update err: %w", updateErr)
-	} else if closeErr != nil {
-		return fmt.Errorf("close err: %w", closeErr)
+	err = aifc.file.Close()
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	if len(errs) != 0 {
+		return errors.Join(errs...)
 	}
 
 	return nil
@@ -134,12 +134,14 @@ func (aifc *AIFC) updateSizes() error {
 }
 
 func (aifc *AIFC) Normalize(max float32) error {
+	var err error
+
 	// Read and write buffers
 	readerBuffer := make([]byte, 8192)
 	writerBuffer := make([]byte, 0, 8192)
 
 	// Seek to start of sound data
-	_, err := aifc.file.Seek(92, io.SeekStart)
+	_, err = aifc.file.Seek(92, io.SeekStart)
 	if err != nil {
 		return err
 	}
@@ -148,17 +150,21 @@ func (aifc *AIFC) Normalize(max float32) error {
 		return nil
 	}
 
-	oom := 1.0 / max
+	var (
+		oom = 1.0 / max
+		pos int64
+		n   int
+	)
 
 	// Loop through all samples
 	for {
-		pos, err := aifc.file.Seek(0, io.SeekCurrent)
+		pos, err = aifc.file.Seek(0, io.SeekCurrent)
 		if err != nil {
 			return err
 		}
 
 		// Read 8192 bytes if possible
-		n, err := aifc.file.Read(readerBuffer)
+		n, err = aifc.file.Read(readerBuffer)
 		if err != nil {
 			if err != io.EOF {
 				return err
@@ -175,7 +181,7 @@ func (aifc *AIFC) Normalize(max float32) error {
 		for {
 			var f float32
 
-			err := binary.Read(byteReader, binary.BigEndian, &f)
+			err = binary.Read(byteReader, binary.BigEndian, &f)
 			if err != nil {
 				if err != io.EOF {
 					return err
@@ -183,7 +189,10 @@ func (aifc *AIFC) Normalize(max float32) error {
 				break
 			}
 
-			binary.Write(writer, binary.BigEndian, f*oom)
+			err = binary.Write(writer, binary.BigEndian, f*oom)
+			if err != nil {
+				return err
+			}
 		}
 
 		// Seek last pos
