@@ -46,8 +46,8 @@ func main() {
 	ph2 := shape.New(conv.ToVec(phasor.New(300.0, 88200.0, 0.0)), 1, mult.New(0.4))
 
 	sf, err := writer.NewWithOptions(
-		"test.wav",
-		writer.WAV,
+		"test",
+		writer.AIFC,
 		2,
 		44100.0,
 		writer.Options{
