@@ -6,6 +6,7 @@ import (
 	"github.com/almerlucke/sndfile/writer/backend/aifc"
 	"github.com/almerlucke/sndfile/writer/backend/wav"
 	"github.com/dh1tw/gosamplerate"
+	"path"
 )
 
 type FileFormat int
@@ -46,13 +47,21 @@ func NewWithOptions(filePath string, fileFormat FileFormat, numChannels int, sam
 	var be backend.Backend
 	var err error
 
+	ext := path.Ext(filePath)
+
 	switch fileFormat {
 	case AIFC:
+		if ext == "" {
+			filePath += ".aif"
+		}
 		be, err = aifc.New(filePath, numChannels, sampleRate)
 		if err != nil {
 			return nil, err
 		}
 	case WAV:
+		if ext == "" {
+			filePath += ".wav"
+		}
 		be, err = wav.New(filePath, numChannels, sampleRate)
 		if err != nil {
 			return nil, err
