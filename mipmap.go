@@ -108,6 +108,15 @@ func NewMipMapSoundFile(filePath string, depth int) (*MipMapSoundFile, error) {
 	return mmsf, nil
 }
 
+func MustMipMapSoundFile(filePath string, depth int) *MipMapSoundFile {
+	sf, err := NewMipMapSoundFile(filePath, depth)
+	if err != nil {
+		panic(err)
+	}
+
+	return sf
+}
+
 func (mmsf *MipMapSoundFile) NumChannels() int {
 	return len(mmsf.channels)
 }

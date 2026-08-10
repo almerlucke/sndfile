@@ -66,7 +66,7 @@ func NewSoundFile(filePath string) (*SoundFile, error) {
 			break
 		}
 
-		for i := int64(0); i < framesRead; i++ {
+		for i := range framesRead {
 			for j := int64(0); j < int64(info.Channels); j++ {
 				channels[j][frameIndex+i] = samples[i*int64(info.Channels)+j]
 			}
@@ -83,6 +83,16 @@ func NewSoundFile(filePath string) (*SoundFile, error) {
 	sf.out = make([]float64, info.Channels)
 
 	return &sf, nil
+}
+
+// MustSoundFile must load a sound file
+func MustSoundFile(filePath string) *SoundFile {
+	sf, err := NewSoundFile(filePath)
+	if err != nil {
+		panic(err)
+	}
+
+	return sf
 }
 
 func (sf *SoundFile) NumChannels() int {

@@ -1,6 +1,6 @@
 module github.com/almerlucke/sndfile
 
-go 1.22.1
+go 1.26.4
 
 require (
 	github.com/dh1tw/gosamplerate v0.1.2
