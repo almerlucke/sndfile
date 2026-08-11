@@ -1,24 +1,25 @@
 package sndfile
 
 import (
+	"github.com/almerlucke/sndfile/float"
 	"github.com/mkb218/gosndfile/sndfile"
 )
 
-type SoundFiler interface {
+type SoundFiler[T float.Float] interface {
 	NumChannels() int
 	SampleRate() float64
 	NumFrames() int64
 	Duration() float64
 	Depth() int
-	Buffer(channel int, depth int) []float64
-	Lookup(pos float64, channel int, depth int, wrap bool) float64
-	LookupAll(pos float64, depth int, wrap bool) []float64
+	Buffer(channel int, depth int) []T
+	Lookup(pos float64, channel int, depth int, wrap bool) T
+	LookupAll(pos float64, depth int, wrap bool) []T
 }
 
 // SoundFile contains sound file deinterleaved samples and implements SoundFiler interface
-type SoundFile struct {
+type SoundFile[T float.Float] struct {
 	// Deinterleaved channels
-	channels [][]float64
+	channels [][]T
 	// Sample rate
 	sampleRate float64
 	// Number of frames
@@ -26,11 +27,11 @@ type SoundFile struct {
 	// Duration in seconds
 	duration float64
 	// Lookup output
-	out []float64
+	out []T
 }
 
 // NewSoundFile load sound file from disk
-func NewSoundFile(filePath string) (*SoundFile, error) {
+func NewSoundFile[T float.Float](filePath string) (*SoundFile[T], error) {
 	info := sndfile.Info{}
 
 	file, err := sndfile.Open(filePath, sndfile.Read, &info)
@@ -43,17 +44,17 @@ func NewSoundFile(filePath string) (*SoundFile, error) {
 	}()
 
 	// Create one big buffer to hold all samples
-	fileBuffer := make([]float64, int64(info.Channels)*info.Frames)
+	fileBuffer := make([]T, int64(info.Channels)*info.Frames)
 
 	// Create separate channels by splitting buffer into info.Channels parts
-	channels := make([][]float64, info.Channels)
+	channels := make([][]T, info.Channels)
 	for i := int32(0); i < info.Channels; i++ {
 		channels[i] = fileBuffer[int64(i)*info.Frames : int64(i+1)*info.Frames]
 	}
 
 	// Deinterleave in blocks
 	sampleBlockSize := int64(2048) * int64(info.Channels)
-	samples := make([]float64, sampleBlockSize)
+	samples := make([]T, sampleBlockSize)
 	frameIndex := int64(0)
 
 	for {
@@ -75,19 +76,19 @@ func NewSoundFile(filePath string) (*SoundFile, error) {
 		frameIndex += framesRead
 	}
 
-	sf := SoundFile{}
+	sf := SoundFile[T]{}
 	sf.duration = float64(info.Frames) / float64(info.Samplerate)
 	sf.numFrames = info.Frames
 	sf.channels = channels
 	sf.sampleRate = float64(info.Samplerate)
-	sf.out = make([]float64, info.Channels)
+	sf.out = make([]T, info.Channels)
 
 	return &sf, nil
 }
 
 // MustSoundFile must load a sound file
-func MustSoundFile(filePath string) *SoundFile {
-	sf, err := NewSoundFile(filePath)
+func MustSoundFile[T float.Float](filePath string) *SoundFile[T] {
+	sf, err := NewSoundFile[T](filePath)
 	if err != nil {
 		panic(err)
 	}
@@ -95,37 +96,37 @@ func MustSoundFile(filePath string) *SoundFile {
 	return sf
 }
 
-func (sf *SoundFile) NumChannels() int {
+func (sf *SoundFile[T]) NumChannels() int {
 	return len(sf.channels)
 }
 
-func (sf *SoundFile) SampleRate() float64 {
+func (sf *SoundFile[T]) SampleRate() float64 {
 	return sf.sampleRate
 }
 
-func (sf *SoundFile) NumFrames() int64 {
+func (sf *SoundFile[T]) NumFrames() int64 {
 	return sf.numFrames
 }
 
-func (sf *SoundFile) Duration() float64 {
+func (sf *SoundFile[T]) Duration() float64 {
 	return sf.duration
 }
 
-func (sf *SoundFile) Depth() int {
+func (sf *SoundFile[T]) Depth() int {
 	return 1
 }
 
-func (sf *SoundFile) Buffer(channel int, _ int) []float64 {
+func (sf *SoundFile[T]) Buffer(channel int, _ int) []T {
 	return sf.channels[channel]
 }
 
-func (sf *SoundFile) Lookup(pos float64, channel int, _ int, wrap bool) float64 {
-	lp := NewLookupParam(pos, sf.numFrames, wrap)
+func (sf *SoundFile[T]) Lookup(pos float64, channel int, _ int, wrap bool) T {
+	lp := NewLookupParam[T](pos, sf.numFrames, wrap)
 	return lp.Lookup(sf.channels[channel])
 }
 
-func (sf *SoundFile) LookupAll(pos float64, _ int, wrap bool) []float64 {
-	lp := NewLookupParam(pos, sf.numFrames, wrap)
+func (sf *SoundFile[T]) LookupAll(pos float64, _ int, wrap bool) []T {
+	lp := NewLookupParam[T](pos, sf.numFrames, wrap)
 	out := sf.out
 
 	for c := 0; c < len(sf.channels); c++ {

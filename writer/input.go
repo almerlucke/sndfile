@@ -1,23 +1,21 @@
 package writer
 
+import "github.com/almerlucke/sndfile/float"
+
 // InputConverter convert any buffer input type to a float32 buffer output
 type InputConverter interface {
 	Convert(any) []float32
 	FrameSize() int
 }
 
-type float interface {
-	float32 | float64
-}
-
 // ChannelConverter convert from multiple float input buffers (channels) to one interleaved buffer
-type ChannelConverter[T float] struct {
+type ChannelConverter[T float.Float] struct {
 	buffer      []float32
 	frameSize   int
 	numChannels int
 }
 
-func NewChannelConverter[T float](frameSize int, numChannels int) *ChannelConverter[T] {
+func NewChannelConverter[T float.Float](frameSize int, numChannels int) *ChannelConverter[T] {
 	return &ChannelConverter[T]{
 		buffer:      make([]float32, frameSize*numChannels),
 		frameSize:   frameSize,
@@ -42,12 +40,12 @@ func (c *ChannelConverter[T]) FrameSize() int {
 }
 
 // TypeConverter convert any float buffer (i.e. float64) to []float32
-type TypeConverter[T float] struct {
+type TypeConverter[T float.Float] struct {
 	buffer    []float32
 	frameSize int
 }
 
-func NewTypeConverter[T float](frameSize int, numChannels int) *TypeConverter[T] {
+func NewTypeConverter[T float.Float](frameSize int, numChannels int) *TypeConverter[T] {
 	return &TypeConverter[T]{
 		buffer:    make([]float32, frameSize*numChannels),
 		frameSize: frameSize,
