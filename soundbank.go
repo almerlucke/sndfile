@@ -1,3 +1,5 @@
 package sndfile
 
-type SoundBank map[string]SoundFiler
+import "github.com/almerlucke/sndfile/float"
+
+type SoundBank[T float.Float] map[string]SoundFiler[T]

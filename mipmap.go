@@ -3,12 +3,14 @@ package sndfile
 import (
 	"github.com/almerlucke/sndfile/dsp/filters"
 	"github.com/almerlucke/sndfile/dsp/windows"
+	"github.com/almerlucke/sndfile/float"
+
 	"math"
 )
 
-type MipMap struct {
+type MipMap[T float.Float] struct {
 	depth   int
-	buffers [][]float64
+	buffers [][]T
 }
 
 func SpeedToMipMapDepth(speed float64) int {
@@ -23,10 +25,10 @@ func SpeedToMipMapDepth(speed float64) int {
 	return depth
 }
 
-func NewMipMap(buf []float64, sampleRate float64, depth int) (*MipMap, error) {
-	mm := &MipMap{
+func NewMipMap[T float.Float](buf []T, sampleRate float64, depth int) (*MipMap[T], error) {
+	mm := &MipMap[T]{
 		depth:   depth,
-		buffers: make([][]float64, depth),
+		buffers: make([][]T, depth),
 	}
 
 	mm.buffers[0] = buf
@@ -35,7 +37,7 @@ func NewMipMap(buf []float64, sampleRate float64, depth int) (*MipMap, error) {
 
 	for d := 1; d < depth; d++ {
 		dfc := fc / float64(d+1)
-		fir := &filters.FIR{
+		fir := &filters.FIR[T]{
 			Sinc: &filters.Sinc{
 				CutOffFreq:   dfc,
 				SamplingFreq: int(sampleRate),
@@ -55,45 +57,45 @@ func NewMipMap(buf []float64, sampleRate float64, depth int) (*MipMap, error) {
 	return mm, nil
 }
 
-func (mm *MipMap) Length() int {
+func (mm *MipMap[T]) Length() int {
 	return len(mm.buffers[0])
 }
 
-func (mm *MipMap) Depth() int {
+func (mm *MipMap[T]) Depth() int {
 	return mm.depth
 }
 
-func (mm *MipMap) Lookup(pos float64, depth int, wrap bool) float64 {
-	lp := NewLookupParam(pos, int64(mm.Length()), wrap)
+func (mm *MipMap[T]) Lookup(pos float64, depth int, wrap bool) T {
+	lp := NewLookupParam[T](pos, int64(mm.Length()), wrap)
 	return lp.Lookup(mm.buffers[depth])
 }
 
-func (mm *MipMap) Buffer(depth int) []float64 {
+func (mm *MipMap[T]) Buffer(depth int) []T {
 	return mm.buffers[depth]
 }
 
-type MipMapSoundFile struct {
-	channels   []*MipMap
+type MipMapSoundFile[T float.Float] struct {
+	channels   []*MipMap[T]
 	sampleRate float64
 	numFrames  int64
 	duration   float64
 	depth      int
-	out        []float64
+	out        []T
 }
 
-func NewMipMapSoundFile(filePath string, depth int) (*MipMapSoundFile, error) {
-	sndFile, err := NewSoundFile(filePath)
+func NewMipMapSoundFile[T float.Float](filePath string, depth int) (*MipMapSoundFile[T], error) {
+	sndFile, err := NewSoundFile[T](filePath)
 	if err != nil {
 		return nil, err
 	}
 
-	mmsf := &MipMapSoundFile{
+	mmsf := &MipMapSoundFile[T]{
 		depth:      depth,
 		sampleRate: sndFile.SampleRate(),
 		numFrames:  sndFile.NumFrames(),
 		duration:   sndFile.Duration(),
-		channels:   make([]*MipMap, sndFile.NumChannels()),
-		out:        make([]float64, sndFile.NumChannels()),
+		channels:   make([]*MipMap[T], sndFile.NumChannels()),
+		out:        make([]T, sndFile.NumChannels()),
 	}
 
 	for channel := 0; channel < sndFile.NumChannels(); channel++ {
@@ -108,8 +110,8 @@ func NewMipMapSoundFile(filePath string, depth int) (*MipMapSoundFile, error) {
 	return mmsf, nil
 }
 
-func MustMipMapSoundFile(filePath string, depth int) *MipMapSoundFile {
-	sf, err := NewMipMapSoundFile(filePath, depth)
+func MustMipMapSoundFile[T float.Float](filePath string, depth int) *MipMapSoundFile[T] {
+	sf, err := NewMipMapSoundFile[T](filePath, depth)
 	if err != nil {
 		panic(err)
 	}
@@ -117,37 +119,37 @@ func MustMipMapSoundFile(filePath string, depth int) *MipMapSoundFile {
 	return sf
 }
 
-func (mmsf *MipMapSoundFile) NumChannels() int {
+func (mmsf *MipMapSoundFile[T]) NumChannels() int {
 	return len(mmsf.channels)
 }
 
-func (mmsf *MipMapSoundFile) SampleRate() float64 {
+func (mmsf *MipMapSoundFile[T]) SampleRate() float64 {
 	return mmsf.sampleRate
 }
 
-func (mmsf *MipMapSoundFile) NumFrames() int64 {
+func (mmsf *MipMapSoundFile[T]) NumFrames() int64 {
 	return mmsf.numFrames
 }
 
-func (mmsf *MipMapSoundFile) Duration() float64 {
+func (mmsf *MipMapSoundFile[T]) Duration() float64 {
 	return mmsf.duration
 }
 
-func (mmsf *MipMapSoundFile) Depth() int {
+func (mmsf *MipMapSoundFile[T]) Depth() int {
 	return mmsf.depth
 }
 
-func (mmsf *MipMapSoundFile) Buffer(channel int, depth int) []float64 {
+func (mmsf *MipMapSoundFile[T]) Buffer(channel int, depth int) []T {
 	return mmsf.channels[channel].Buffer(depth)
 }
 
-func (mmsf *MipMapSoundFile) Lookup(pos float64, channel int, depth int, wrap bool) float64 {
+func (mmsf *MipMapSoundFile[T]) Lookup(pos float64, channel int, depth int, wrap bool) T {
 	return mmsf.channels[channel].Lookup(pos, depth, wrap)
 }
 
-func (mmsf *MipMapSoundFile) LookupAll(pos float64, depth int, wrap bool) []float64 {
+func (mmsf *MipMapSoundFile[T]) LookupAll(pos float64, depth int, wrap bool) []T {
 	out := mmsf.out
-	lp := NewLookupParam(pos, mmsf.numFrames, wrap)
+	lp := NewLookupParam[T](pos, mmsf.numFrames, wrap)
 
 	for c := 0; c < len(mmsf.channels); c++ {
 		out[c] = lp.Lookup(mmsf.channels[c].Buffer(depth))
@@ -156,10 +158,10 @@ func (mmsf *MipMapSoundFile) LookupAll(pos float64, depth int, wrap bool) []floa
 	return out
 }
 
-func (mmsf *MipMapSoundFile) LookupWithSpeed(pos float64, channel int, speed float64, wrap bool) float64 {
+func (mmsf *MipMapSoundFile[T]) LookupWithSpeed(pos float64, channel int, speed float64, wrap bool) T {
 	return mmsf.Lookup(pos, channel, SpeedToMipMapDepth(speed), wrap)
 }
 
-func (mmsf *MipMapSoundFile) LookupAllWithSpeed(pos float64, speed float64, wrap bool) []float64 {
+func (mmsf *MipMapSoundFile[T]) LookupAllWithSpeed(pos float64, speed float64, wrap bool) []T {
 	return mmsf.LookupAll(pos, SpeedToMipMapDepth(speed), wrap)
 }
