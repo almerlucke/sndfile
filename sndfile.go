@@ -14,6 +14,7 @@ type SoundFiler[T float.Float] interface {
 	Buffer(channel int, depth int) []T
 	Lookup(pos float64, channel int, depth int, wrap bool) T
 	LookupAll(pos float64, depth int, wrap bool) []T
+	ZeroCrossings(channel int) ZeroCrossings
 }
 
 // SoundFile contains sound file deinterleaved samples and implements SoundFiler interface
@@ -28,6 +29,8 @@ type SoundFile[T float.Float] struct {
 	duration float64
 	// Lookup output
 	out []T
+	// Zero crossings
+	zeroCrossings []ZeroCrossings
 }
 
 // NewSoundFile load sound file from disk
@@ -76,10 +79,17 @@ func NewSoundFile[T float.Float](filePath string) (*SoundFile[T], error) {
 		frameIndex += framesRead
 	}
 
+	// Find zero crossings
+	zeroCrossings := make([]ZeroCrossings, info.Channels)
+	for i := range zeroCrossings {
+		zeroCrossings[i] = calculateZeroCrossings(channels[i])
+	}
+
 	sf := SoundFile[T]{}
 	sf.duration = float64(info.Frames) / float64(info.Samplerate)
 	sf.numFrames = info.Frames
 	sf.channels = channels
+	sf.zeroCrossings = zeroCrossings
 	sf.sampleRate = float64(info.Samplerate)
 	sf.out = make([]T, info.Channels)
 
@@ -134,4 +144,8 @@ func (sf *SoundFile[T]) LookupAll(pos float64, _ int, wrap bool) []T {
 	}
 
 	return out
+}
+
+func (sf *SoundFile[T]) ZeroCrossings(channel int) ZeroCrossings {
+	return sf.zeroCrossings[channel]
 }
