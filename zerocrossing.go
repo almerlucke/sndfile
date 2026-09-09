@@ -20,7 +20,7 @@ type ZeroCrossing struct {
 
 type ZeroCrossings []ZeroCrossing
 
-func (z ZeroCrossings) NearestPos(pos float64, direction int) ZeroCrossing {
+func (z ZeroCrossings) NearestPos(pos float64, direction int) (ZeroCrossing, bool) {
 	var (
 		closestIndex = -1
 		closestDist  = math.MaxFloat64
@@ -37,13 +37,13 @@ func (z ZeroCrossings) NearestPos(pos float64, direction int) ZeroCrossing {
 	}
 
 	if closestIndex > -1 {
-		return z[closestIndex]
+		return z[closestIndex], true
 	}
 
-	return ZeroCrossing{}
+	return ZeroCrossing{}, false
 }
 
-func (z ZeroCrossings) NearestPosFrames(pos int64, direction int) ZeroCrossing {
+func (z ZeroCrossings) NearestPosFrames(pos int64, direction int) (ZeroCrossing, bool) {
 	var (
 		closestIndex = -1
 		closestDist  = int64(math.MaxInt64)
@@ -63,10 +63,10 @@ func (z ZeroCrossings) NearestPosFrames(pos int64, direction int) ZeroCrossing {
 	}
 
 	if closestIndex > -1 {
-		return z[closestIndex]
+		return z[closestIndex], true
 	}
 
-	return ZeroCrossing{}
+	return ZeroCrossing{}, false
 }
 
 func calculateZeroCrossings[T float.Float](buffer []T) ZeroCrossings {
