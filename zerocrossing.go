@@ -70,27 +70,56 @@ func (z ZeroCrossings) NearestPosFrames(pos int64, direction int) (ZeroCrossing,
 }
 
 func calculateZeroCrossings[T float.Float](buffer []T) ZeroCrossings {
+	if len(buffer) < 2 {
+		return nil
+	}
+
 	var (
-		prevVal       T
-		zeroCrossings ZeroCrossings
-		n             = float64(len(buffer))
+		zeroCrossings  ZeroCrossings
+		n              = float64(len(buffer))
+		lastNonZero    T
+		lastNonZeroIdx = -1
 	)
 
+	// Find the initial non-zero sample
 	for i, v := range buffer {
-		if prevVal < 0.0 && v > 0.0 {
+		if v != 0.0 {
+			lastNonZero = v
+			lastNonZeroIdx = i
+			break
+		}
+	}
+
+	if lastNonZeroIdx == -1 {
+		// All samples are 0.0
+		return nil
+	}
+
+	for i := lastNonZeroIdx + 1; i < len(buffer); i++ {
+		v := buffer[i]
+		if v == 0.0 {
+			continue
+		}
+
+		if (lastNonZero < 0.0 && v > 0.0) || (lastNonZero > 0.0 && v < 0.0) {
+			// Sub-sample linear interpolation fraction between last non-zero and current sample
+			fraction := float64(-lastNonZero) / float64(v-lastNonZero)
+			exactFrame := float64(lastNonZeroIdx) + fraction*float64(i-lastNonZeroIdx)
+
+			direction := DirectionUp
+			if lastNonZero > 0.0 {
+				direction = DirectionDown
+			}
+
 			zeroCrossings = append(zeroCrossings, ZeroCrossing{
-				PositionFrames: int64(i),
-				Position:       float64(i) / n,
-				Direction:      DirectionUp,
-			})
-		} else if prevVal > 0.0 && v < 0.0 {
-			zeroCrossings = append(zeroCrossings, ZeroCrossing{
-				PositionFrames: int64(i),
-				Position:       float64(i) / n,
-				Direction:      DirectionDown,
+				PositionFrames: int64(math.Round(exactFrame)),
+				Position:       exactFrame / n,
+				Direction:      direction,
 			})
 		}
-		prevVal = v
+
+		lastNonZero = v
+		lastNonZeroIdx = i
 	}
 
 	return zeroCrossings
