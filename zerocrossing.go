@@ -2,6 +2,7 @@ package sndfile
 
 import (
 	"math"
+	"sort"
 
 	"github.com/almerlucke/sndfile/float"
 )
@@ -20,53 +21,71 @@ type ZeroCrossing struct {
 
 type ZeroCrossings []ZeroCrossing
 
+// NearestPos returns the zero crossing closest to pos (0-1), optionally only crossings in the given
+// direction. Zero crossings are sorted by position, so it uses a binary search: fast also for long
+// files with many crossings (granular sources call it for every grain)
 func (z ZeroCrossings) NearestPos(pos float64, direction int) (ZeroCrossing, bool) {
-	var (
-		closestIndex = -1
-		closestDist  = math.MaxFloat64
-	)
-
-	for i, c := range z {
-		if direction == DirectionAny || c.Direction == direction {
-			dist := math.Abs(c.Position - pos)
-			if dist < closestDist {
-				closestDist = dist
-				closestIndex = i
-			}
-		}
+	start := sort.Search(len(z), func(i int) bool { return z[i].Position >= pos })
+	index := z.nearest(start, direction, func(c ZeroCrossing) float64 { return math.Abs(c.Position - pos) })
+	if index < 0 {
+		return ZeroCrossing{}, false
 	}
-
-	if closestIndex > -1 {
-		return z[closestIndex], true
-	}
-
-	return ZeroCrossing{}, false
+	return z[index], true
 }
 
+// NearestPosFrames returns the zero crossing closest to the frame position, optionally only
+// crossings in the given direction
 func (z ZeroCrossings) NearestPosFrames(pos int64, direction int) (ZeroCrossing, bool) {
-	var (
-		closestIndex = -1
-		closestDist  = int64(math.MaxInt64)
-	)
+	start := sort.Search(len(z), func(i int) bool { return z[i].PositionFrames >= pos })
+	index := z.nearest(start, direction, func(c ZeroCrossing) float64 {
+		return math.Abs(float64(c.PositionFrames - pos))
+	})
+	if index < 0 {
+		return ZeroCrossing{}, false
+	}
+	return z[index], true
+}
 
-	for i, c := range z {
-		if direction == DirectionAny || c.Direction == direction {
-			dist := c.PositionFrames - pos
-			if dist < 0 {
-				dist *= -1
-			}
-			if dist < closestDist {
-				closestDist = dist
-				closestIndex = i
-			}
+// nearest walks outwards from the insertion point start to the closest crossing with a matching
+// direction, on equal distance the earlier crossing wins
+func (z ZeroCrossings) nearest(start int, direction int, dist func(ZeroCrossing) float64) int {
+	matches := func(c ZeroCrossing) bool { return direction == DirectionAny || c.Direction == direction }
+
+	left := start - 1
+	for left >= 0 && !matches(z[left]) {
+		left--
+	}
+	right := start
+	for right < len(z) && !matches(z[right]) {
+		right++
+	}
+
+	var best int
+	switch {
+	case left < 0 && right >= len(z):
+		return -1
+	case left < 0:
+		best = right
+	case right >= len(z):
+		best = left
+	case dist(z[right]) < dist(z[left]):
+		best = right
+	default:
+		best = left
+	}
+
+	// crossings can share a frame position, then the earliest one wins
+	for i := best - 1; i >= 0; i-- {
+		if !matches(z[i]) {
+			continue
 		}
+		if dist(z[i]) != dist(z[best]) {
+			break
+		}
+		best = i
 	}
 
-	if closestIndex > -1 {
-		return z[closestIndex], true
-	}
-
-	return ZeroCrossing{}, false
+	return best
 }
 
 func calculateZeroCrossings[T float.Float](buffer []T) ZeroCrossings {

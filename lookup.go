@@ -9,7 +9,7 @@ type LookupParam[T float.Float] struct {
 }
 
 func NewLookupParam[T float.Float](pos float64, n int64, wrap bool) *LookupParam[T] {
-	i1 := int64(pos)
+	i1 := min(int64(pos), n-1)
 	i2 := i1 + 1
 
 	if wrap {
