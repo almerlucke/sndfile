@@ -25,6 +25,19 @@ func SpeedToMipMapDepth(speed float64) int {
 	return depth
 }
 
+// mipMapFilter is the low pass filter that makes mipmap level d (d >= 1): the cutoff halves the Nyquist frequency d+1 times. The cache key is
+// derived from this filter, so everything that decides how a level sounds has to be set here
+func mipMapFilter[T float.Float](sampleRate float64, d int) *filters.FIR[T] {
+	return &filters.FIR[T]{
+		Sinc: &filters.Sinc{
+			CutOffFreq:   sampleRate / 2.0 / float64(d+1),
+			SamplingFreq: int(sampleRate),
+			Taps:         200,
+			Window:       windows.Hamming,
+		},
+	}
+}
+
 func NewMipMap[T float.Float](buf []T, sampleRate float64, depth int) (*MipMap[T], error) {
 	mm := &MipMap[T]{
 		depth:   depth,
@@ -33,18 +46,8 @@ func NewMipMap[T float.Float](buf []T, sampleRate float64, depth int) (*MipMap[T
 
 	mm.buffers[0] = buf
 
-	fc := sampleRate / 2.0 // Nyquist start
-
 	for d := 1; d < depth; d++ {
-		dfc := fc / float64(d+1)
-		fir := &filters.FIR[T]{
-			Sinc: &filters.Sinc{
-				CutOffFreq:   dfc,
-				SamplingFreq: int(sampleRate),
-				Taps:         200,
-				Window:       windows.Hamming,
-			},
-		}
+		fir := mipMapFilter[T](sampleRate, d)
 
 		filteredBuf, err := fir.LowPass(buf)
 		if err != nil {
@@ -101,7 +104,7 @@ func NewMipMapSoundFile[T float.Float](filePath string, depth int) (*MipMapSound
 	}
 
 	// the levels are read from the cache if they are kept there, and kept there when they have been made
-	cachePath := mipMapCachePath[T](filePath, sndFile.NumFrames(), sndFile.NumChannels(), depth)
+	cachePath := mipMapCachePath[T](filePath, mmsf.sampleRate, sndFile.NumFrames(), sndFile.NumChannels(), depth)
 	if cachePath != "" {
 		if levels, ok := readMipMapCache[T](cachePath, sndFile.NumFrames(), sndFile.NumChannels(), depth); ok {
 			for channel := range mmsf.channels {

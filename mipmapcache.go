@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,13 +18,13 @@ import (
 // time, and the settings of the filters: a file that changes is made again
 var MipMapCache string
 
-// mipMapVersion changes when the filters that make the lower resolutions change (taps, window, cutoffs): what is kept is then not used
-const mipMapVersion = 1
+// mipMapVersion is the version of the layout of the cache file. A change in the filters needs no bump: the key holds a fingerprint of the filters
+const mipMapVersion = 2
 
 var mipMapMagic = [8]byte{'S', 'N', 'D', 'M', 'I', 'P', 0, mipMapVersion}
 
 // mipMapCachePath is the file of the cache for a sound file at a depth, or "" if there is no cache or the file cannot be told by its stat
-func mipMapCachePath[T float.Float](path string, frames int64, channels, depth int) string {
+func mipMapCachePath[T float.Float](path string, sampleRate float64, frames int64, channels, depth int) string {
 	if MipMapCache == "" || depth < 2 {
 		return ""
 	}
@@ -38,10 +37,37 @@ func mipMapCachePath[T float.Float](path string, frames int64, channels, depth i
 		return ""
 	}
 	var zero T
-	key := fmt.Sprintf("%s|%d|%d|%d|%d|%d|%d|%T", abs, fi.Size(), fi.ModTime().UnixNano(), frames, channels, depth, mipMapVersion, zero)
+	key := fmt.Sprintf("%s|%d|%d|%d|%d|%d|%d|%T|%x", abs, fi.Size(), fi.ModTime().UnixNano(), frames, channels, depth, mipMapVersion, zero,
+		mipMapFingerprint[T](sampleRate, depth))
 	sum := sha256.Sum256([]byte(key))
 	name := strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs))
 	return filepath.Join(MipMapCache, fmt.Sprintf("%s-%s.mip", sanitize(name), hex.EncodeToString(sum[:8])))
+}
+
+// mipMapFingerprint identifies the filters that make levels 1 to depth-1 for a sample rate: the kernel of every level, and what the filter does with
+// a fixed probe signal, so that a change in the kernel (taps, window, cutoffs) as well as a change in the convolution itself gives another key
+func mipMapFingerprint[T float.Float](sampleRate float64, depth int) [8]byte {
+	probe := make([]T, 1024)
+	seed := uint32(1)
+	for i := range probe {
+		seed = seed*1664525 + 1013904223
+		probe[i] = T(float64(seed>>8)/float64(1<<23) - 1)
+	}
+	h := sha256.New()
+	for d := 1; d < depth; d++ {
+		fir := mipMapFilter[T](sampleRate, d)
+		_ = binary.Write(h, binary.LittleEndian, fir.Sinc.LowPassCoefs())
+		out, err := fir.LowPass(probe)
+		if err != nil {
+			// no level can be made with this filter: the key only has to differ from the keys of working filters
+			h.Write([]byte(err.Error()))
+			continue
+		}
+		_ = binary.Write(h, binary.LittleEndian, out)
+	}
+	var fp [8]byte
+	copy(fp[:], h.Sum(nil))
+	return fp
 }
 
 func sanitize(s string) string {
@@ -146,8 +172,6 @@ func writeMipMapCache[T float.Float](path string, frames int64, channels, depth 
 	}
 	ok = true
 }
-
-var _ = math.Pi
 
 // newBufferedWriter is a writer with a big buffer: the levels are written in large pieces
 func newBufferedWriter(w io.Writer) *bufWriter { return &bufWriter{w: w, buf: make([]byte, 0, 1<<20)} }
