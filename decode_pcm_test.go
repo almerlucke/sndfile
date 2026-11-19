@@ -201,3 +201,60 @@ func TestMalformedNeverPanics(t *testing.T) {
 		}
 	}
 }
+
+// TestUnfinishedFilesAreReadable: a file of a writer that stopped before its first refresh still has the placeholder sizes of the header (0): all of
+// the samples that are in the file are read, by the loader and by the reader
+func TestUnfinishedFilesAreReadable(t *testing.T) {
+	const frames = 1000
+
+	items := make([]float32, 2*frames)
+	for i := range items {
+		items[i] = float32(math.Sin(float64(i) * 0.02))
+	}
+
+	for name, mk := range map[string]func(string) (backend.Backend, error){
+		"u.wav": func(p string) (backend.Backend, error) { return wav.New(p, 2, 8000) },
+		"u.aif": func(p string) (backend.Backend, error) { return aifc.New(p, 2, 8000) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), name)
+
+			w, err := mk(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Write(items); err != nil {
+				t.Fatal(err)
+			}
+			// no Close: the sizes in the header are still those of the start
+
+			sf, err := NewSoundFile[float32](path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sf.NumFrames() != frames || sf.SampleRate() != 8000 {
+				t.Fatalf("loaded %d frames at %v Hz, want %d at 8000", sf.NumFrames(), sf.SampleRate(), frames)
+			}
+
+			r, err := Open[float32](path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = r.Close() }()
+
+			if r.Info().Frames != frames {
+				t.Fatalf("the reader sees %d frames, want %d", r.Info().Frames, frames)
+			}
+
+			buf := make([]float32, 2*frames)
+			if got, err := r.ReadFrames(buf); err != nil || got != frames {
+				t.Fatalf("read %d frames, %v", got, err)
+			}
+			for i := range items {
+				if buf[i] != items[i] || sf.Buffer(i%2, 0)[i/2] != items[i] {
+					t.Fatalf("sample %d differs", i)
+				}
+			}
+		})
+	}
+}

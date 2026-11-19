@@ -195,7 +195,7 @@ func TestReaderSeek(t *testing.T) {
 
 // TestReaderFloat64 reads into float64 as well
 func TestReaderFloat64(t *testing.T) {
-	path := makeReaderFile(t, t.TempDir(), readerVariants[1])
+	path := fixturePath("wav_s16_st.wav")
 
 	want, err := NewSoundFile[float64](path)
 	if err != nil {
@@ -221,7 +221,7 @@ func TestReaderFloat64(t *testing.T) {
 
 // TestReaderTruncatedFile: a file that is shorter than its header says gives the frames that there are, and no error
 func TestReaderTruncatedFile(t *testing.T) {
-	path := makeReaderFile(t, t.TempDir(), readerVariants[1])
+	path := fixturePath("wav_s16_st.wav")
 
 	data, err := os.ReadFile(path)
 	if err != nil {

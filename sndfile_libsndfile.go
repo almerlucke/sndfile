@@ -7,6 +7,9 @@ import (
 	"github.com/mkb218/gosndfile/sndfile"
 )
 
+// haveLibsndfile is true in a build with libsndfile
+const haveLibsndfile = true
+
 // newSoundFileLibsndfile loads a sound file with libsndfile, for the formats that have no pure-Go decoder
 func newSoundFileLibsndfile[T float.Float](filePath string) (*SoundFile[T], error) {
 	info := sndfile.Info{}

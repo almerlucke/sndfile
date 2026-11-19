@@ -55,7 +55,9 @@ func (w *chunkWalker) next() (chunk, bool) {
 	left := w.size - c.at
 	n := int64(declared)
 
-	if c.id == "data" && (declared == 0 || declared == math.MaxUint32) && left > 0 {
+	// a sound chunk (wav data, aiff SSND) with a placeholder size is one of a writer that did not finish. An SSND of 0 bytes is no empty sound: it has an
+	// offset and a block size, 8 bytes at least
+	if (c.id == "data" || c.id == "SSND") && (declared == 0 || declared == math.MaxUint32) && left > 0 {
 		n = left
 	}
 
@@ -313,8 +315,10 @@ func parseAIFF(r io.ReaderAt, size int64) (pcmFile, error) {
 		return f, errTruncated
 	}
 
-	// the number of frames in the header is leading when the data is longer (padding)
-	f.len = min(f.len, int64(frames)*int64(f.layout.frameSize()))
+	// the number of frames in the header is leading when the data is longer (padding), unless it is the 0 of a writer that did not finish
+	if frames > 0 {
+		f.len = min(f.len, int64(frames)*int64(f.layout.frameSize()))
+	}
 
 	return f, nil
 }

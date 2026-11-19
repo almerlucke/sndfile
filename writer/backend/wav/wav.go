@@ -12,6 +12,11 @@ import (
 	"github.com/almerlucke/sndfile/writer/backend"
 )
 
+// headerRefreshBytes is how many bytes of samples are written before the sizes in the header are brought up to date again. The sizes are only right at
+// Close, if the program stops before that a file would say it has no samples. Refreshing them now and then limits what a crash loses to what was
+// written since: that is about 3 seconds of stereo at 44.1 kHz
+var headerRefreshBytes int64 = 1 << 20
+
 // maxSamples is the most samples a wav file can hold: the size of the RIFF chunk (50 bytes more than the samples) is 32 bits
 const maxSamples = (math.MaxUint32 - 50) / 4
 
@@ -20,6 +25,8 @@ type Wav struct {
 	totalSamples uint32
 	sampleRate   int32
 	file         *os.File
+	// sinceRefresh is the number of bytes written since the sizes in the header were written
+	sinceRefresh int64
 }
 
 func New(filePath string, numChannels int, sampleRate float64) (*Wav, error) {
@@ -175,7 +182,25 @@ func (wav *Wav) writeHeader() error {
 	return nil
 }
 
+// updateSizes brings the sizes in the header up to date, and leaves the position in the file where it was
 func (wav *Wav) updateSizes() error {
+	end, err := wav.file.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return err
+	}
+
+	if err := wav.writeSizes(); err != nil {
+		return err
+	}
+
+	wav.sinceRefresh = 0
+
+	_, err = wav.file.Seek(end, io.SeekStart)
+
+	return err
+}
+
+func (wav *Wav) writeSizes() error {
 	var size uint32
 
 	// Seek total size
@@ -315,7 +340,14 @@ func (wav *Wav) Write(items []float32) error {
 
 	wav.totalSamples += uint32(len(items))
 
-	_, err := wav.file.Write(buf.Bytes())
+	if _, err := wav.file.Write(buf.Bytes()); err != nil {
+		return err
+	}
 
-	return err
+	wav.sinceRefresh += int64(buf.Len())
+	if wav.sinceRefresh >= headerRefreshBytes {
+		return wav.updateSizes()
+	}
+
+	return nil
 }

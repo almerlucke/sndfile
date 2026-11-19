@@ -36,7 +36,10 @@ type SoundFile[T float.Float] struct {
 }
 
 // NewSoundFile load sound file from disk. The pure-Go decoders read wav, aiff, mp3, flac and ogg vorbis. For other formats, build with
-// -tags libsndfile (needs cgo and the libsndfile library): they are then read by libsndfile
+// -tags libsndfile (needs cgo and the libsndfile library): they are then read by libsndfile.
+//
+// An mp3 with the tag of an encoder (LAME, ffmpeg) is cut to its sound as ffmpeg cuts it: the frame with the tag, the delays of the encoder and of the
+// decoder and the padding are left out, so that the sound starts and ends where it did in the original.
 
 func NewSoundFile[T float.Float](filePath string) (*SoundFile[T], error) {
 	// Try the pure-Go decoders (wav, aiff, mp3, flac, ogg vorbis) first. Other formats and encodings (a-law, adpcm, au, caf, w64, rf64, opus, ...) need
@@ -47,6 +50,13 @@ func NewSoundFile[T float.Float](filePath string) (*SoundFile[T], error) {
 	}
 
 	if !errors.Is(err, errNoDecoder) {
+		// a pure-Go decoder that cannot read the file (mp3 at 8, 11.025 or 12 kHz, a damaged file): libsndfile may, if it is built in
+		if haveLibsndfile {
+			if sf, errLib := newSoundFileLibsndfile[T](filePath); errLib == nil {
+				return sf, nil
+			}
+		}
+
 		return nil, fmt.Errorf("decode %s: %w", filePath, err)
 	}
 

@@ -13,6 +13,11 @@ import (
 	"github.com/almerlucke/sndfile/writer/backend/aifc/float80"
 )
 
+// headerRefreshBytes is how many bytes of samples are written before the sizes in the header are brought up to date again. The sizes are only right at
+// Close, if the program stops before that a file would say it has no samples. Refreshing them now and then limits what a crash loses to what was
+// written since: that is about 3 seconds of stereo at 44.1 kHz
+var headerRefreshBytes int64 = 1 << 20
+
 // maxSampleBytes is the most bytes of samples an aifc file can hold: the size of the FORM chunk, with the header (100 bytes, with room to spare) and
 // the samples, is 32 bits
 const maxSampleBytes = math.MaxUint32 - 100
@@ -39,6 +44,8 @@ type AIFC struct {
 	numSampleFrames uint32
 	sampleRate      float64
 	file            *os.File
+	// sinceRefresh is the number of bytes written since the sizes in the header were written
+	sinceRefresh int64
 }
 
 func New(filePath string, numChannels int, sampleRate float64) (*AIFC, error) {
@@ -107,7 +114,25 @@ func (aifc *AIFC) formChunkSize() uint32 {
 	return 4 + aifc.versionChunkSize() + aifc.commonChunkSize() + aifc.soundChunkSize() + 24
 }
 
+// updateSizes brings the sizes in the header up to date, and leaves the position in the file where it was
 func (aifc *AIFC) updateSizes() error {
+	end, err := aifc.file.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return err
+	}
+
+	if err := aifc.writeSizes(); err != nil {
+		return err
+	}
+
+	aifc.sinceRefresh = 0
+
+	_, err = aifc.file.Seek(end, io.SeekStart)
+
+	return err
+}
+
+func (aifc *AIFC) writeSizes() error {
 	// Seek form size
 	_, err := aifc.file.Seek(4, io.SeekStart)
 	if err != nil {
@@ -390,7 +415,14 @@ func (aifc *AIFC) Write(items []float32) error {
 
 	aifc.numSampleFrames += uint32(numFrames)
 
-	_, err := aifc.file.Write(buf.Bytes())
+	if _, err := aifc.file.Write(buf.Bytes()); err != nil {
+		return err
+	}
 
-	return err
+	aifc.sinceRefresh += int64(buf.Len())
+	if aifc.sinceRefresh >= headerRefreshBytes {
+		return aifc.updateSizes()
+	}
+
+	return nil
 }

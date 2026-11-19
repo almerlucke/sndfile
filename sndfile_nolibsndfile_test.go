@@ -3,7 +3,6 @@
 package sndfile
 
 import (
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,17 +10,7 @@ import (
 
 // without the libsndfile tag an unsupported encoding gives a clear error
 func TestUnsupportedEncodingErrors(t *testing.T) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg not available")
-	}
-
-	path := filepath.Join(t.TempDir(), "alaw.wav")
-	if out, err := exec.Command("ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
-		"sine=frequency=330:duration=0.2:sample_rate=8000", "-c:a", "pcm_alaw", path).CombinedOutput(); err != nil {
-		t.Skipf("ffmpeg cannot make alaw: %v %s", err, out)
-	}
-
-	_, err := NewSoundFile[float64](path)
+	_, err := NewSoundFile[float64](fixturePath("wav_alaw_mono.wav"))
 	if err == nil || !strings.Contains(err.Error(), "libsndfile") {
 		t.Fatalf("got %v, want an unsupported format error that names the libsndfile tag", err)
 	}
@@ -29,18 +18,18 @@ func TestUnsupportedEncodingErrors(t *testing.T) {
 
 // without the libsndfile tag Open names the tag for a format that has no pure-Go reader
 func TestOpenUnsupportedErrors(t *testing.T) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg not available")
-	}
-
-	path := filepath.Join(t.TempDir(), "alaw.wav")
-	if out, err := exec.Command("ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
-		"sine=frequency=330:duration=0.2:sample_rate=8000", "-c:a", "pcm_alaw", path).CombinedOutput(); err != nil {
-		t.Skipf("ffmpeg cannot make alaw: %v %s", err, out)
-	}
-
-	_, err := Open[float32](path)
+	_, err := Open[float32](fixturePath("wav_alaw_mono.wav"))
 	if err == nil || !strings.Contains(err.Error(), "libsndfile") {
 		t.Fatalf("got %v, want an unsupported format error that names the libsndfile tag", err)
+	}
+}
+
+// mp3 at 8, 11.025 and 12 kHz (mpeg 2.5) is not read by go-mp3: without libsndfile it is an error that says so, and not a panic or an empty sound
+func TestMPEG25IsAnError(t *testing.T) {
+	if _, err := NewSoundFile[float32](filepath.Join("testdata", "mp3_8k_st.mp3")); err == nil || !strings.Contains(err.Error(), "2.5") {
+		t.Fatalf("loading gave %v, want an error about MPEG 2.5", err)
+	}
+	if _, err := Open[float32](filepath.Join("testdata", "mp3_8k_st.mp3")); err == nil || !strings.Contains(err.Error(), "2.5") {
+		t.Fatalf("opening gave %v, want an error about MPEG 2.5", err)
 	}
 }

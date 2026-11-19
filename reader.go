@@ -75,6 +75,14 @@ func Open[T float.Float](filePath string) (Reader[T], error) {
 
 	if err != nil {
 		_ = f.Close()
+
+		// a pure-Go reader that cannot read the file (mp3 at 8, 11.025 or 12 kHz, a damaged file): libsndfile may, if it is built in
+		if haveLibsndfile {
+			if rl, errLib := openLibsndfile[T](filePath); errLib == nil {
+				return rl, nil
+			}
+		}
+
 		return nil, fmt.Errorf("open %s: %w", filePath, err)
 	}
 
@@ -170,7 +178,8 @@ const (
 type mp3Reader[T float.Float] struct {
 	f       *os.File
 	dec     *mp3.Decoder
-	frames  int64
+	frames  int64 // the frames of sound: what is left after the delays and the padding are taken away
+	skip    int64 // the frames at the start of the decoder that are no sound
 	pos     int64
 	scratch []byte
 	skipBuf [4 * 4096]byte
@@ -186,7 +195,20 @@ func newMP3Reader[T float.Float](f *os.File) (*mp3Reader[T], error) {
 		return nil, err
 	}
 
-	return &mp3Reader[T]{f: f, dec: dec, frames: dec.Length() / 4}, nil
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+
+	r := &mp3Reader[T]{f: f, dec: dec}
+	r.skip, r.frames = mp3Info(f, st.Size()).trim(dec.Length() / 4)
+
+	// the decoder is at the start of what it gives: go to the start of the sound
+	if err := r.SeekFrame(0); err != nil {
+		return nil, err
+	}
+
+	return r, nil
 }
 
 func (r *mp3Reader[T]) Info() Info {
@@ -205,16 +227,16 @@ func (r *mp3Reader[T]) SeekFrame(frame int64) error {
 	}
 
 	// A frame of mp3 needs the frames before it (the bit reservoir, and the overlap of the filter bank): go-mp3 seeks to the frame itself and
-	// gets those wrong. So land some frames before it and decode on, the state is the same after a few frames
-	start := max(0, (frame-mp3PreRoll)/mp3FrameAlign*mp3FrameAlign)
-	if _, err := r.dec.Seek(start*4, io.SeekStart); err != nil {
+	// gets those wrong. So land some frames before it and decode on, the state is the same after a few frames. The frames are those of the
+	// decoder, the sound starts after r.skip of them
+	target := frame + r.skip
+	cur := max(0, (target-mp3PreRoll)/mp3FrameAlign*mp3FrameAlign)
+	if _, err := r.dec.Seek(cur*4, io.SeekStart); err != nil {
 		return err
 	}
 
-	r.pos = start
-
-	for r.pos < frame {
-		n := min(frame-r.pos, int64(len(r.skipBuf)/4))
+	for cur < target {
+		n := min(target-cur, int64(len(r.skipBuf)/4))
 		got, err := io.ReadFull(r.dec, r.skipBuf[:n*4])
 		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
 			return err
@@ -222,8 +244,10 @@ func (r *mp3Reader[T]) SeekFrame(frame int64) error {
 		if got == 0 {
 			break
 		}
-		r.pos += int64(got / 4)
+		cur += int64(got / 4)
 	}
+
+	r.pos = frame
 
 	return nil
 }

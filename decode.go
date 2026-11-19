@@ -83,10 +83,12 @@ func decodeMP3[T float.Float](data []byte) (*decoded[T], error) {
 		return nil, err
 	}
 
-	frames := len(raw) / 4
-	channels := newChannels[T](2, frames)
+	// what is not sound is left out: the frame with the tag, the delays of the encoder and decoder, and the padding
+	start, frames := mp3Info(bytes.NewReader(data), int64(len(data))).trim(int64(len(raw) / 4))
+	raw = raw[start*4:]
+	channels := newChannels[T](2, int(frames))
 
-	for i := 0; i < frames; i++ {
+	for i := 0; i < int(frames); i++ {
 		channels[0][i] = T(int16(binary.LittleEndian.Uint16(raw[4*i:]))) / 32768
 		channels[1][i] = T(int16(binary.LittleEndian.Uint16(raw[4*i+2:]))) / 32768
 	}
