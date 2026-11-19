@@ -2,6 +2,7 @@ package sndfile
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -10,12 +11,14 @@ import (
 	"github.com/hajimehoshi/go-mp3"
 	"github.com/jfreymuth/oggvorbis"
 	"github.com/mewkiz/flac"
+
+	"github.com/almerlucke/sndfile/float"
 )
 
 // decoded holds the result of a pure-Go decoder: deinterleaved channels
 // normalized to [-1, 1].
-type decoded struct {
-	channels   [][]float32
+type decoded[T float.Float] struct {
+	channels   [][]T
 	sampleRate int
 }
 
@@ -23,20 +26,24 @@ type decoded struct {
 // libsndfile fallback should be used.
 var errNoDecoder = errors.New("sndfile: no pure-Go decoder for file")
 
-// decodeFile sniffs the file header and decodes mp3, flac and ogg vorbis.
-func decodeFile(filePath string) (*decoded, error) {
+// decodeFile sniffs the file header and decodes wav, aiff, mp3, flac and ogg vorbis. Encodings that are not handled give errNoDecoder.
+func decodeFile[T float.Float](filePath string) (*decoded[T], error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, err
 	}
 
 	switch {
+	case isWAV(data):
+		return decodeWAV[T](data)
+	case isAIFF(data):
+		return decodeAIFF[T](data)
 	case bytes.HasPrefix(data, []byte("fLaC")):
-		return decodeFLAC(data)
+		return decodeFLAC[T](data)
 	case bytes.HasPrefix(data, []byte("OggS")):
-		return decodeOggVorbis(data)
+		return decodeOggVorbis[T](data)
 	case isMP3(data):
-		return decodeMP3(data)
+		return decodeMP3[T](data)
 	}
 
 	return nil, errNoDecoder
@@ -51,25 +58,19 @@ func isMP3(data []byte) bool {
 	return len(data) > 2 && data[0] == 0xFF && data[1]&0xE0 == 0xE0 && data[1]&0x18 != 0x08 && data[1]&0x06 != 0
 }
 
-func deinterleave(samples []float32, numChannels int) [][]float32 {
-	frames := len(samples) / numChannels
-	buf := make([]float32, frames*numChannels)
-	channels := make([][]float32, numChannels)
+// newChannels makes numChannels channels of frames samples that share one buffer
+func newChannels[T float.Float](numChannels, frames int) [][]T {
+	buf := make([]T, numChannels*frames)
+	channels := make([][]T, numChannels)
 
 	for c := range channels {
-		channels[c] = buf[c*frames : (c+1)*frames]
-	}
-
-	for i := 0; i < frames; i++ {
-		for c := 0; c < numChannels; c++ {
-			channels[c][i] = samples[i*numChannels+c]
-		}
+		channels[c] = buf[c*frames : (c+1)*frames : (c+1)*frames]
 	}
 
 	return channels
 }
 
-func decodeMP3(data []byte) (*decoded, error) {
+func decodeMP3[T float.Float](data []byte) (*decoded[T], error) {
 	dec, err := mp3.NewDecoder(bytes.NewReader(data))
 	if err != nil {
 		return nil, err
@@ -82,15 +83,18 @@ func decodeMP3(data []byte) (*decoded, error) {
 		return nil, err
 	}
 
-	samples := make([]float32, len(raw)/2)
-	for i := range samples {
-		samples[i] = float32(int16(uint16(raw[2*i])|uint16(raw[2*i+1])<<8)) / 32768
+	frames := len(raw) / 4
+	channels := newChannels[T](2, frames)
+
+	for i := 0; i < frames; i++ {
+		channels[0][i] = T(int16(binary.LittleEndian.Uint16(raw[4*i:]))) / 32768
+		channels[1][i] = T(int16(binary.LittleEndian.Uint16(raw[4*i+2:]))) / 32768
 	}
 
-	return &decoded{channels: deinterleave(samples, 2), sampleRate: dec.SampleRate()}, nil
+	return &decoded[T]{channels: channels, sampleRate: dec.SampleRate()}, nil
 }
 
-func decodeOggVorbis(data []byte) (*decoded, error) {
+func decodeOggVorbis[T float.Float](data []byte) (*decoded[T], error) {
 	samples, format, err := oggvorbis.ReadAll(bytes.NewReader(data))
 	if err != nil {
 		return nil, err
@@ -100,10 +104,19 @@ func decodeOggVorbis(data []byte) (*decoded, error) {
 		return nil, fmt.Errorf("sndfile: invalid ogg channel count %d", format.Channels)
 	}
 
-	return &decoded{channels: deinterleave(samples, format.Channels), sampleRate: format.SampleRate}, nil
+	frames := len(samples) / format.Channels
+	channels := newChannels[T](format.Channels, frames)
+
+	for i := 0; i < frames; i++ {
+		for c := range channels {
+			channels[c][i] = T(samples[i*format.Channels+c])
+		}
+	}
+
+	return &decoded[T]{channels: channels, sampleRate: format.SampleRate}, nil
 }
 
-func decodeFLAC(data []byte) (*decoded, error) {
+func decodeFLAC[T float.Float](data []byte) (*decoded[T], error) {
 	stream, err := flac.New(bytes.NewReader(data))
 	if err != nil {
 		return nil, err
@@ -111,11 +124,11 @@ func decodeFLAC(data []byte) (*decoded, error) {
 	defer func() { _ = stream.Close() }()
 
 	numChannels := int(stream.Info.NChannels)
-	scale := 1 / float32(int64(1)<<(stream.Info.BitsPerSample-1))
-	channels := make([][]float32, numChannels)
+	scale := 1 / T(int64(1)<<(stream.Info.BitsPerSample-1))
+	channels := make([][]T, numChannels)
 
 	for c := range channels {
-		channels[c] = make([]float32, 0, stream.Info.NSamples)
+		channels[c] = make([]T, 0, stream.Info.NSamples)
 	}
 
 	for {
@@ -129,10 +142,10 @@ func decodeFLAC(data []byte) (*decoded, error) {
 
 		for c := range channels {
 			for _, s := range frame.Subframes[c].Samples {
-				channels[c] = append(channels[c], float32(s)*scale)
+				channels[c] = append(channels[c], T(s)*scale)
 			}
 		}
 	}
 
-	return &decoded{channels: channels, sampleRate: int(stream.Info.SampleRate)}, nil
+	return &decoded[T]{channels: channels, sampleRate: int(stream.Info.SampleRate)}, nil
 }
