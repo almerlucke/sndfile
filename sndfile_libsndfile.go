@@ -69,3 +69,39 @@ func newSoundFileLibsndfile[T float.Float](filePath string) (*SoundFile[T], erro
 
 	return &sf, nil
 }
+
+// libsndfileReader streams any format that libsndfile reads
+type libsndfileReader[T float.Float] struct {
+	f    *sndfile.File
+	info Info
+}
+
+// openLibsndfile is the fallback of Open for formats without a pure-Go reader
+func openLibsndfile[T float.Float](filePath string) (Reader[T], error) {
+	var info sndfile.Info
+
+	f, err := sndfile.Open(filePath, sndfile.Read, &info)
+	if err != nil {
+		return nil, err
+	}
+
+	return &libsndfileReader[T]{f: f, info: Info{Channels: int(info.Channels), SampleRate: float64(info.Samplerate), Frames: info.Frames}}, nil
+}
+
+func (r *libsndfileReader[T]) Info() Info { return r.info }
+
+func (r *libsndfileReader[T]) SeekFrame(frame int64) error {
+	if err := checkSeek(frame, r.info.Frames); err != nil {
+		return err
+	}
+
+	_, err := r.f.Seek(frame, sndfile.Set)
+
+	return err
+}
+
+func (r *libsndfileReader[T]) ReadFrames(buf []T) (int64, error) {
+	return r.f.ReadFrames(buf[:len(buf)/r.info.Channels*r.info.Channels])
+}
+
+func (r *libsndfileReader[T]) Close() error { return r.f.Close() }

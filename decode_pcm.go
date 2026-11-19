@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"io"
 	"math"
 
 	"github.com/almerlucke/sndfile/float"
@@ -21,41 +22,65 @@ func isAIFF(data []byte) bool {
 
 var errTruncated = errors.New("sndfile: truncated or malformed file")
 
-// chunk is one chunk of a RIFF or IFF container
-type chunk struct {
-	id   string
-	data []byte
-	// declared is the size in the header, which can be a placeholder (0 or 0xFFFFFFFF) when a writer did not finish
-	declared uint32
+// maxHeaderChunk is the largest fmt or COMM chunk that is read: they are small, a larger one is not a header
+const maxHeaderChunk = 1 << 16
+
+// chunkWalker goes over the chunks of a RIFF or IFF container in a file, reading the headers only: the samples are not read
+type chunkWalker struct {
+	r     io.ReaderAt
+	size  int64
+	off   int64 // where the next chunk header is
+	order binary.ByteOrder
 }
 
-// nextChunk reads the chunk header at the start of buf and gives the chunk and the rest after it (and its pad byte). A chunk that claims more than
-// is left, or is a placeholder size, runs to the end of the file: streamed and unfinished files are common and still have all their samples
-func nextChunk(buf []byte, order binary.ByteOrder) (chunk, []byte, bool) {
-	if len(buf) < 8 {
-		return chunk{}, nil, false
+// chunk is a chunk found by the walker
+type chunk struct {
+	id string
+	// at is where the body of the chunk starts and n how long it is. A chunk that claims more than is left, or a data chunk with a placeholder size
+	// (0 or 0xFFFFFFFF, from a writer that did not finish), runs to the end of the file: streamed and unfinished files still have all their samples
+	at, n int64
+}
+
+func (w *chunkWalker) next() (chunk, bool) {
+	var h [8]byte
+	if w.off < 0 || w.off+8 > w.size {
+		return chunk{}, false
+	}
+	if _, err := w.r.ReadAt(h[:], w.off); err != nil {
+		return chunk{}, false
 	}
 
-	c := chunk{id: string(buf[0:4]), declared: order.Uint32(buf[4:8])}
-	body := buf[8:]
-	size := uint64(c.declared)
+	c := chunk{id: string(h[0:4]), at: w.off + 8}
+	declared := w.order.Uint32(h[4:8])
+	left := w.size - c.at
+	n := int64(declared)
 
-	if c.id == "data" && (c.declared == 0 || c.declared == math.MaxUint32) && len(body) > 0 {
-		size = uint64(len(body))
+	if c.id == "data" && (declared == 0 || declared == math.MaxUint32) && left > 0 {
+		n = left
 	}
 
-	if size > uint64(len(body)) {
-		size = uint64(len(body))
+	c.n = min(n, left)
+	w.off = c.at + c.n
+
+	if c.n%2 == 1 && w.off < w.size {
+		w.off++ // chunks are padded to an even size
 	}
 
-	c.data = body[:size]
-	rest := body[size:]
+	return c, true
+}
 
-	if size%2 == 1 && len(rest) > 0 {
-		rest = rest[1:]
+// body reads the body of a (small) chunk
+func (w *chunkWalker) body(c chunk) ([]byte, error) {
+	if c.n > maxHeaderChunk {
+		return nil, errTruncated
 	}
 
-	return c, rest, true
+	b := make([]byte, c.n)
+	if _, err := w.r.ReadAt(b, c.at); err != nil && !(err == io.EOF && int64(len(b)) == c.n) {
+		return nil, errTruncated
+	}
+
+	return b, nil
 }
 
 // pcmLayout describes how the samples of a file are stored
@@ -68,12 +93,20 @@ type pcmLayout struct {
 	unsigned8   bool // wav 8 bit is unsigned
 }
 
-// readPCM converts interleaved sample bytes into channels. A final partial frame is dropped
-func readPCM[T float.Float](data []byte, l pcmLayout) *decoded[T] {
-	frameSize := l.numChannels * l.bytesPer
-	frames := len(data) / frameSize
-	channels := newChannels[T](l.numChannels, frames)
+func (l pcmLayout) frameSize() int { return l.numChannels * l.bytesPer }
 
+// pcmFile is where the samples of a wav or aiff file are: layout, and the offset and length in bytes of the sample data
+type pcmFile struct {
+	layout       pcmLayout
+	dataOff, len int64
+}
+
+// frames is the number of whole frames
+func (f pcmFile) frames() int64 { return f.len / int64(f.layout.frameSize()) }
+
+// convertChannel converts the samples of one channel of interleaved sample bytes into dst, at every stride-th place. A final partial frame is not read
+func convertChannel[T float.Float](dst []T, stride int, src []byte, l pcmLayout, channel, frames int) {
+	frameSize := l.frameSize()
 	var order binary.ByteOrder = binary.LittleEndian
 	if l.bigEndian {
 		order = binary.BigEndian
@@ -81,38 +114,54 @@ func readPCM[T float.Float](data []byte, l pcmLayout) *decoded[T] {
 
 	// signed integers are scaled to [-1, 1) by the size of their bit depth
 	scale := 1 / T(uint64(1)<<(8*l.bytesPer-1))
+	at := channel * l.bytesPer
 
-	for i := 0; i < frames; i++ {
-		for c := 0; c < l.numChannels; c++ {
-			b := data[i*frameSize+c*l.bytesPer:]
-			var v T
-
-			switch {
-			case l.float && l.bytesPer == 4:
-				v = T(math.Float32frombits(order.Uint32(b)))
-			case l.float:
-				v = T(math.Float64frombits(order.Uint64(b)))
-			case l.unsigned8:
-				v = (T(b[0]) - 128) * scale
-			case l.bytesPer == 1:
-				v = T(int8(b[0])) * scale
-			case l.bytesPer == 2:
-				v = T(int16(order.Uint16(b))) * scale
-			case l.bytesPer == 3:
-				var x int32
-				if l.bigEndian {
-					x = int32(b[0])<<16 | int32(b[1])<<8 | int32(b[2])
-				} else {
-					x = int32(b[2])<<16 | int32(b[1])<<8 | int32(b[0])
-				}
-				x = x << 8 >> 8 // sign extend 24 bits
-				v = T(x) * scale
-			default:
-				v = T(int32(order.Uint32(b))) * scale
-			}
-
-			channels[c][i] = v
+	switch {
+	case l.float && l.bytesPer == 4:
+		for i := 0; i < frames; i++ {
+			dst[i*stride] = T(math.Float32frombits(order.Uint32(src[i*frameSize+at:])))
 		}
+	case l.float:
+		for i := 0; i < frames; i++ {
+			dst[i*stride] = T(math.Float64frombits(order.Uint64(src[i*frameSize+at:])))
+		}
+	case l.unsigned8:
+		for i := 0; i < frames; i++ {
+			dst[i*stride] = (T(src[i*frameSize+at]) - 128) * scale
+		}
+	case l.bytesPer == 1:
+		for i := 0; i < frames; i++ {
+			dst[i*stride] = T(int8(src[i*frameSize+at])) * scale
+		}
+	case l.bytesPer == 2:
+		for i := 0; i < frames; i++ {
+			dst[i*stride] = T(int16(order.Uint16(src[i*frameSize+at:]))) * scale
+		}
+	case l.bytesPer == 3:
+		for i := 0; i < frames; i++ {
+			b := src[i*frameSize+at:]
+			var x int32
+			if l.bigEndian {
+				x = int32(b[0])<<16 | int32(b[1])<<8 | int32(b[2])
+			} else {
+				x = int32(b[2])<<16 | int32(b[1])<<8 | int32(b[0])
+			}
+			dst[i*stride] = T(x<<8>>8) * scale // sign extend 24 bits
+		}
+	default:
+		for i := 0; i < frames; i++ {
+			dst[i*stride] = T(int32(order.Uint32(src[i*frameSize+at:]))) * scale
+		}
+	}
+}
+
+// readPCM converts all the interleaved sample bytes into channels
+func readPCM[T float.Float](data []byte, l pcmLayout) *decoded[T] {
+	frames := len(data) / l.frameSize()
+	channels := newChannels[T](l.numChannels, frames)
+
+	for c := range channels {
+		convertChannel(channels[c], 1, data, l, c, frames)
 	}
 
 	return &decoded[T]{channels: channels, sampleRate: l.sampleRate}
@@ -124,159 +173,168 @@ const (
 	wavFormatExtensible = 0xFFFE
 )
 
-// decodeWAV reads PCM (8, 16, 24 and 32 bit) and float (32 and 64 bit) wav files, also with the extensible header. Other encodings (adpcm, a-law,
-// rf64, ...) give errNoDecoder so that libsndfile gets them
-func decodeWAV[T float.Float](data []byte) (*decoded[T], error) {
-	var layout pcmLayout
-	var samples []byte
+// parseWAV finds the layout and the samples of a wav file with PCM (8, 16, 24 and 32 bit) or float (32 and 64 bit) samples, also with the extensible
+// header. Other encodings (adpcm, a-law, rf64, ...) give errNoDecoder so that libsndfile gets them
+func parseWAV(r io.ReaderAt, size int64) (pcmFile, error) {
+	var f pcmFile
 	haveFmt, haveData := false, false
+	w := &chunkWalker{r: r, size: size, off: 12, order: binary.LittleEndian}
 
-	rest := data[12:]
-	for {
-		c, next, ok := nextChunk(rest, binary.LittleEndian)
+	for !(haveFmt && haveData) {
+		c, ok := w.next()
 		if !ok {
 			break
 		}
-		rest = next
 
 		switch c.id {
 		case "fmt ":
-			if len(c.data) < 16 {
-				return nil, errTruncated
+			b, err := w.body(c)
+			if err != nil || len(b) < 16 {
+				return f, errTruncated
 			}
 
-			format := int(binary.LittleEndian.Uint16(c.data[0:]))
-			layout.numChannels = int(binary.LittleEndian.Uint16(c.data[2:]))
-			layout.sampleRate = int(binary.LittleEndian.Uint32(c.data[4:]))
-			bits := int(binary.LittleEndian.Uint16(c.data[14:]))
+			format := int(binary.LittleEndian.Uint16(b[0:]))
+			f.layout.numChannels = int(binary.LittleEndian.Uint16(b[2:]))
+			f.layout.sampleRate = int(binary.LittleEndian.Uint32(b[4:]))
+			bits := int(binary.LittleEndian.Uint16(b[14:]))
 
-			if format == wavFormatExtensible && len(c.data) >= 26 {
+			if format == wavFormatExtensible && len(b) >= 26 {
 				// the first two bytes of the sub format guid are the format
-				format = int(binary.LittleEndian.Uint16(c.data[24:]))
+				format = int(binary.LittleEndian.Uint16(b[24:]))
 			}
 
 			switch {
 			case format == wavFormatPCM && (bits == 8 || bits == 16 || bits == 24 || bits == 32):
-				layout.unsigned8 = bits == 8
+				f.layout.unsigned8 = bits == 8
 			case format == wavFormatFloat && (bits == 32 || bits == 64):
-				layout.float = true
+				f.layout.float = true
 			default:
-				return nil, errNoDecoder
+				return f, errNoDecoder
 			}
 
-			layout.bytesPer = bits / 8
+			f.layout.bytesPer = bits / 8
 			haveFmt = true
 		case "data":
-			samples = c.data
+			f.dataOff, f.len = c.at, c.n
 			haveData = true
 		}
-
-		if haveFmt && haveData {
-			break
-		}
 	}
 
-	if !haveFmt || !haveData {
-		return nil, errTruncated
+	if !haveFmt || !haveData || f.layout.numChannels < 1 || f.layout.sampleRate < 1 {
+		return f, errTruncated
 	}
 
-	if layout.numChannels < 1 || layout.sampleRate < 1 {
-		return nil, errTruncated
-	}
-
-	return readPCM[T](samples, layout), nil
+	return f, nil
 }
 
-// decodeAIFF reads aiff and aifc files with PCM (8 to 32 bit, big endian or little endian 'sowt') and float ('fl32', 'fl64') samples
-func decodeAIFF[T float.Float](data []byte) (*decoded[T], error) {
-	isAIFC := bytes.Equal(data[8:12], []byte("AIFC"))
+// parseAIFF finds the layout and the samples of an aiff or aifc file with PCM (8 to 32 bit, big endian or little endian 'sowt') or float ('fl32',
+// 'fl64') samples. Other encodings give errNoDecoder
+func parseAIFF(r io.ReaderAt, size int64) (pcmFile, error) {
+	var f pcmFile
+	var head [4]byte
+	if _, err := r.ReadAt(head[:], 8); err != nil {
+		return f, errTruncated
+	}
+	isAIFC := bytes.Equal(head[:], []byte("AIFC"))
 
-	var layout pcmLayout
-	var samples []byte
 	var frames uint32
 	haveComm, haveSound := false, false
-	layout.bigEndian = true
+	f.layout.bigEndian = true
+	w := &chunkWalker{r: r, size: size, off: 12, order: binary.BigEndian}
 
-	rest := data[12:]
-	for {
-		c, next, ok := nextChunk(rest, binary.BigEndian)
+	for !(haveComm && haveSound) {
+		c, ok := w.next()
 		if !ok {
 			break
 		}
-		rest = next
 
 		switch c.id {
 		case "COMM":
+			b, err := w.body(c)
 			minSize := 18
 			if isAIFC {
 				minSize = 22
 			}
-			if len(c.data) < minSize {
-				return nil, errTruncated
+			if err != nil || len(b) < minSize {
+				return f, errTruncated
 			}
 
-			layout.numChannels = int(binary.BigEndian.Uint16(c.data[0:]))
-			frames = binary.BigEndian.Uint32(c.data[2:])
-			bits := int(binary.BigEndian.Uint16(c.data[6:]))
-			layout.sampleRate = int(math.Round(float80.NewFromBits(binary.BigEndian.Uint16(c.data[8:]), binary.BigEndian.Uint64(c.data[10:])).Float64()))
+			f.layout.numChannels = int(binary.BigEndian.Uint16(b[0:]))
+			frames = binary.BigEndian.Uint32(b[2:])
+			bits := int(binary.BigEndian.Uint16(b[6:]))
+			f.layout.sampleRate = int(math.Round(float80.NewFromBits(binary.BigEndian.Uint16(b[8:]), binary.BigEndian.Uint64(b[10:])).Float64()))
 
 			compression := "NONE"
 			if isAIFC {
-				compression = string(c.data[18:22])
+				compression = string(b[18:22])
 			}
 
 			switch compression {
 			case "NONE", "twos":
 				if bits < 1 || bits > 32 {
-					return nil, errNoDecoder
+					return f, errNoDecoder
 				}
-				layout.bytesPer = (bits + 7) / 8
+				f.layout.bytesPer = (bits + 7) / 8
 			case "sowt":
 				if bits < 1 || bits > 32 {
-					return nil, errNoDecoder
+					return f, errNoDecoder
 				}
-				layout.bytesPer = (bits + 7) / 8
-				layout.bigEndian = false
+				f.layout.bytesPer = (bits + 7) / 8
+				f.layout.bigEndian = false
 			case "fl32", "FL32":
-				layout.bytesPer, layout.float = 4, true
+				f.layout.bytesPer, f.layout.float = 4, true
 			case "fl64", "FL64":
-				layout.bytesPer, layout.float = 8, true
+				f.layout.bytesPer, f.layout.float = 8, true
 			default:
-				return nil, errNoDecoder
+				return f, errNoDecoder
 			}
 
 			haveComm = true
 		case "SSND":
-			if len(c.data) < 8 {
-				return nil, errTruncated
+			var h [8]byte
+			if c.n < 8 {
+				return f, errTruncated
+			}
+			if _, err := r.ReadAt(h[:], c.at); err != nil {
+				return f, errTruncated
 			}
 
-			offset := uint64(binary.BigEndian.Uint32(c.data[0:]))
-			if 8+offset > uint64(len(c.data)) {
-				return nil, errTruncated
+			offset := int64(binary.BigEndian.Uint32(h[0:]))
+			if 8+offset > c.n {
+				return f, errTruncated
 			}
 
-			samples = c.data[8+offset:]
+			f.dataOff, f.len = c.at+8+offset, c.n-8-offset
 			haveSound = true
 		}
-
-		if haveComm && haveSound {
-			break
-		}
 	}
 
-	if !haveComm || !haveSound {
-		return nil, errTruncated
-	}
-
-	if layout.numChannels < 1 || layout.sampleRate < 1 {
-		return nil, errTruncated
+	if !haveComm || !haveSound || f.layout.numChannels < 1 || f.layout.sampleRate < 1 {
+		return f, errTruncated
 	}
 
 	// the number of frames in the header is leading when the data is longer (padding)
-	if want := uint64(frames) * uint64(layout.numChannels) * uint64(layout.bytesPer); want < uint64(len(samples)) {
-		samples = samples[:want]
+	f.len = min(f.len, int64(frames)*int64(f.layout.frameSize()))
+
+	return f, nil
+}
+
+// decodeWAV reads a whole wav file that is in memory
+func decodeWAV[T float.Float](data []byte) (*decoded[T], error) {
+	f, err := parseWAV(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil, err
 	}
 
-	return readPCM[T](samples, layout), nil
+	return readPCM[T](data[f.dataOff:f.dataOff+f.len], f.layout), nil
+}
+
+// decodeAIFF reads a whole aiff or aifc file that is in memory
+func decodeAIFF[T float.Float](data []byte) (*decoded[T], error) {
+	f, err := parseAIFF(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil, err
+	}
+
+	return readPCM[T](data[f.dataOff:f.dataOff+f.len], f.layout), nil
 }

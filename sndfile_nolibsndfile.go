@@ -12,3 +12,8 @@ import (
 func newSoundFileLibsndfile[T float.Float](filePath string) (*SoundFile[T], error) {
 	return nil, fmt.Errorf("sndfile: unsupported format %q (supported: wav, aiff, mp3, flac, ogg vorbis; build with -tags libsndfile for more)", filePath)
 }
+
+// openLibsndfile is the fallback of Open for formats without a pure-Go reader: without the libsndfile build tag there is none
+func openLibsndfile[T float.Float](filePath string) (Reader[T], error) {
+	return nil, fmt.Errorf("sndfile: unsupported format %q (supported: wav, aiff, mp3, flac, ogg vorbis; build with -tags libsndfile for more)", filePath)
+}
