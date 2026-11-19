@@ -100,6 +100,20 @@ func NewMipMapSoundFile[T float.Float](filePath string, depth int) (*MipMapSound
 		zeroCrossings: sndFile.zeroCrossings,
 	}
 
+	// the levels are read from the cache if they are kept there, and kept there when they have been made
+	cachePath := mipMapCachePath[T](filePath, sndFile.NumFrames(), sndFile.NumChannels(), depth)
+	if cachePath != "" {
+		if levels, ok := readMipMapCache[T](cachePath, sndFile.NumFrames(), sndFile.NumChannels(), depth); ok {
+			for channel := range mmsf.channels {
+				mm := &MipMap[T]{depth: depth, buffers: make([][]T, depth)}
+				mm.buffers[0] = sndFile.Buffer(channel, 0)
+				copy(mm.buffers[1:], levels[channel])
+				mmsf.channels[channel] = mm
+			}
+			return mmsf, nil
+		}
+	}
+
 	for channel := 0; channel < sndFile.NumChannels(); channel++ {
 		mm, err := NewMipMap(sndFile.Buffer(channel, 0), mmsf.sampleRate, depth)
 		if err != nil {
@@ -107,6 +121,10 @@ func NewMipMapSoundFile[T float.Float](filePath string, depth int) (*MipMapSound
 		}
 
 		mmsf.channels[channel] = mm
+	}
+
+	if cachePath != "" {
+		writeMipMapCache(cachePath, sndFile.NumFrames(), sndFile.NumChannels(), depth, mmsf.channels)
 	}
 
 	return mmsf, nil

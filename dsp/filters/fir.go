@@ -2,6 +2,8 @@ package filters
 
 import (
 	"fmt"
+	"runtime"
+	"sync"
 
 	"github.com/almerlucke/sndfile/float"
 )
@@ -45,15 +47,70 @@ func (f *FIR[T]) Convolve(input []T, kernels []float64) ([]T, error) {
 		output[i] = T(sum)
 	}
 
-	for i := len(kernels); i < len(input); i++ {
-		var sum float64
-
-		for j := 0; j < len(kernels); j++ {
-			sum += float64(input[i-j]) * kernels[j]
+	// the rest: a windowed sinc is symmetric, so the two samples that have the same weight are added first (half the multiplications), four sums run
+	// side by side (a sum that waits for the one before it is slow), and the output is cut in pieces for the cores
+	n := len(kernels)
+	sym := true
+	for j := 0; j < n/2; j++ {
+		if kernels[j] != kernels[n-1-j] {
+			sym = false
+			break
 		}
-
-		output[i] = T(sum)
 	}
-
+	work := func(from, to int) {
+		for i := from; i < to; i++ {
+			x := input[i-n+1 : i+1] // x[n-1-j] is input[i-j]
+			var s0, s1, s2, s3 float64
+			if sym {
+				h := n / 2
+				j := 0
+				for ; j+4 <= h; j += 4 {
+					s0 += (float64(x[n-1-j]) + float64(x[j])) * kernels[j]
+					s1 += (float64(x[n-2-j]) + float64(x[j+1])) * kernels[j+1]
+					s2 += (float64(x[n-3-j]) + float64(x[j+2])) * kernels[j+2]
+					s3 += (float64(x[n-4-j]) + float64(x[j+3])) * kernels[j+3]
+				}
+				for ; j < h; j++ {
+					s0 += (float64(x[n-1-j]) + float64(x[j])) * kernels[j]
+				}
+				if n%2 == 1 {
+					s1 += float64(x[h]) * kernels[h]
+				}
+			} else {
+				j := 0
+				for ; j+4 <= n; j += 4 {
+					s0 += float64(x[n-1-j]) * kernels[j]
+					s1 += float64(x[n-2-j]) * kernels[j+1]
+					s2 += float64(x[n-3-j]) * kernels[j+2]
+					s3 += float64(x[n-4-j]) * kernels[j+3]
+				}
+				for ; j < n; j++ {
+					s0 += float64(x[n-1-j]) * kernels[j]
+				}
+			}
+			output[i] = T(s0 + s1 + s2 + s3)
+		}
+	}
+	total := len(input) - n
+	workers := min(runtime.NumCPU(), max(1, total/20000)) // a short signal is not worth the goroutines
+	if workers == 1 {
+		work(n, len(input))
+		return output, nil
+	}
+	var wg sync.WaitGroup
+	chunk := (total + workers - 1) / workers
+	for w := 0; w < workers; w++ {
+		from := n + w*chunk
+		to := min(from+chunk, len(input))
+		if from >= to {
+			break
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			work(from, to)
+		}()
+	}
+	wg.Wait()
 	return output, nil
 }
