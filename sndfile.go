@@ -1,6 +1,9 @@
 package sndfile
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/almerlucke/sndfile/float"
 	"github.com/mkb218/gosndfile/sndfile"
 )
@@ -35,6 +38,16 @@ type SoundFile[T float.Float] struct {
 
 // NewSoundFile load sound file from disk
 func NewSoundFile[T float.Float](filePath string) (*SoundFile[T], error) {
+	// Try the pure-Go decoders (mp3, flac, ogg vorbis) first, fall back to libsndfile
+	dec, err := decodeFile(filePath)
+	if err == nil {
+		return newSoundFileFromDecoded[T](dec), nil
+	}
+
+	if !errors.Is(err, errNoDecoder) {
+		return nil, fmt.Errorf("decode %s: %w", filePath, err)
+	}
+
 	info := sndfile.Info{}
 
 	file, err := sndfile.Open(filePath, sndfile.Read, &info)
@@ -148,4 +161,32 @@ func (sf *SoundFile[T]) LookupAll(pos float64, _ int, wrap bool) []T {
 
 func (sf *SoundFile[T]) ZeroCrossings(channel int) ZeroCrossings {
 	return sf.zeroCrossings[channel]
+}
+
+func newSoundFileFromDecoded[T float.Float](dec *decoded) *SoundFile[T] {
+	channels := make([][]T, len(dec.channels))
+	zeroCrossings := make([]ZeroCrossings, len(dec.channels))
+
+	for c, src := range dec.channels {
+		channels[c] = make([]T, len(src))
+		for i, v := range src {
+			channels[c][i] = T(v)
+		}
+
+		zeroCrossings[c] = calculateZeroCrossings(channels[c])
+	}
+
+	numFrames := int64(0)
+	if len(channels) > 0 {
+		numFrames = int64(len(channels[0]))
+	}
+
+	return &SoundFile[T]{
+		channels:      channels,
+		sampleRate:    float64(dec.sampleRate),
+		numFrames:     numFrames,
+		duration:      float64(numFrames) / float64(dec.sampleRate),
+		out:           make([]T, len(channels)),
+		zeroCrossings: zeroCrossings,
+	}
 }
