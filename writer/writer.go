@@ -2,10 +2,10 @@ package writer
 
 import (
 	"errors"
+	"github.com/almerlucke/sndfile/dsp/resample"
 	"github.com/almerlucke/sndfile/writer/backend"
 	"github.com/almerlucke/sndfile/writer/backend/aifc"
 	"github.com/almerlucke/sndfile/writer/backend/wav"
-	"github.com/dh1tw/gosamplerate"
 	"path"
 )
 
@@ -23,14 +23,16 @@ const (
 type Options struct {
 	InputConverter    InputConverter
 	ConvertSampleRate bool
-	SrConvQuality     int
-	InputSampleRate   float64
-	Normalize         bool
+	// SrConvQuality is one of the qualities of package resample (resample.SincBest, the default, ... resample.Linear), the numbers are the
+	// same as those of libsamplerate
+	SrConvQuality   int
+	InputSampleRate float64
+	Normalize       bool
 }
 
 type Writer struct {
 	opt         Options
-	srConv      gosamplerate.Src
+	srConv      *resample.Resampler
 	backend     backend.Backend
 	numChannels int
 	srRatio     float64
@@ -83,24 +85,19 @@ func NewWithBackend(be backend.Backend, numChannels int, sampleRate float64, opt
 	}
 
 	if opt.ConvertSampleRate {
-		frameSize := DefaultFrameSize
-
-		if opt.InputConverter.FrameSize() != 0 {
-			frameSize = opt.InputConverter.FrameSize()
+		srConv, err := resample.New(opt.SrConvQuality, numChannels)
+		if err != nil {
+			return nil, err
 		}
 
-		srConv, err := gosamplerate.New(opt.SrConvQuality, numChannels, frameSize*numChannels)
+		w.srRatio = sampleRate / opt.InputSampleRate
+
+		err = srConv.SetRatio(w.srRatio)
 		if err != nil {
 			return nil, err
 		}
 
 		w.srConv = srConv
-		w.srRatio = sampleRate / opt.InputSampleRate
-
-		err = w.srConv.SetRatio(w.srRatio)
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	return w, nil
@@ -122,7 +119,7 @@ func (wr *Writer) Write(input any, endOfInput bool) error {
 	}
 
 	if wr.opt.ConvertSampleRate {
-		output, err = wr.srConv.Process(output, wr.srRatio, endOfInput)
+		output, err = wr.srConv.Process(output, endOfInput)
 		if err != nil {
 			return err
 		}
@@ -144,13 +141,6 @@ func (wr *Writer) Close() error {
 
 	if wr.opt.Normalize {
 		err = wr.backend.Normalize(wr.max)
-		if err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	if wr.opt.ConvertSampleRate {
-		err = gosamplerate.Delete(wr.srConv)
 		if err != nil {
 			errs = append(errs, err)
 		}
