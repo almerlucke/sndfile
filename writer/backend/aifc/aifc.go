@@ -3,7 +3,6 @@ package aifc
 import (
 	"bytes"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"github.com/almerlucke/sndfile/writer/backend/aifc/float80"
 	"io"
@@ -245,7 +244,7 @@ func (aifc *AIFC) writeCommon() error {
 	}
 
 	// Sample rate
-	sampleRateBytes, _ := hex.DecodeString(float80.NewFromFloat64(aifc.sampleRate).String())
+	sampleRateBytes := float80.NewFromFloat64(aifc.sampleRate).Bytes()
 	_, err = aifc.file.Write(sampleRateBytes)
 	if err != nil {
 		return err

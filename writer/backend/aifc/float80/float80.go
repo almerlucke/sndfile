@@ -3,6 +3,7 @@
 package float80
 
 import (
+	"encoding/binary"
 	"fmt"
 	"math"
 	"math/big"
@@ -34,10 +35,14 @@ func (f Float80) Bits() (se uint16, m uint64) {
 	return f.se, f.m
 }
 
-// Bytes returns the x86 extended precision binary representation of f as a byte
-// slice.
+// Bytes returns the x86 extended precision binary representation of f as 10
+// bytes, most significant first (big endian), the way it is stored in an AIFF
+// file: 2 bytes with the sign and exponent, then 8 bytes with the mantissa.
 func (f Float80) Bytes() []byte {
-	return []byte(f.String())
+	b := make([]byte, 10)
+	binary.BigEndian.PutUint16(b[0:], f.se)
+	binary.BigEndian.PutUint64(b[2:], f.m)
+	return b
 }
 
 // String returns the IEEE 754 binary representation of f as a string,
@@ -116,9 +121,13 @@ func NewFromBits(se uint16, m uint64) Float80 {
 }
 
 // NewFromBytes returns a new 80-bit floating-point value based on b, which
-// contains 20 bytes in hexadecimal format.
+// contains 10 bytes, most significant first (big endian), as returned by Bytes
+// and as stored in an AIFF file. It panics if b is not 10 bytes long.
 func NewFromBytes(b []byte) Float80 {
-	return NewFromString(string(b))
+	if len(b) != 10 {
+		panic(fmt.Errorf("invalid length of float80 representation, expected 10 bytes, got %d", len(b)))
+	}
+	return NewFromBits(binary.BigEndian.Uint16(b[0:]), binary.BigEndian.Uint64(b[2:]))
 }
 
 // NewFromString returns a new 80-bit floating-point value based on s, which

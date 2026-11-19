@@ -63,98 +63,98 @@ func (wav *Wav) writeHeader() error {
 
 	_, err := wav.file.Write([]byte("RIFF")) // 0
 	if err != nil {
-		return nil
+		return err
 	}
 
 	// write bogus total file size to be overwritten later
 	err = binary.Write(wav.file, binary.LittleEndian, long) // 4
 	if err != nil {
-		return nil
+		return err
 	}
 
 	_, err = wav.file.Write([]byte("WAVE")) // 8
 	if err != nil {
-		return nil
+		return err
 	}
 
 	_, err = wav.file.Write([]byte("fmt ")) // 12
 	if err != nil {
-		return nil
+		return err
 	}
 
 	long = 18                                               // size of fmt chunk
 	err = binary.Write(wav.file, binary.LittleEndian, long) // 16
 	if err != nil {
-		return nil
+		return err
 	}
 
 	short = 3                                                // float32 format
 	err = binary.Write(wav.file, binary.LittleEndian, short) // 20
 	if err != nil {
-		return nil
+		return err
 	}
 
 	short = wav.numChannels
 	err = binary.Write(wav.file, binary.LittleEndian, short) // 22
 	if err != nil {
-		return nil
+		return err
 	}
 
 	err = binary.Write(wav.file, binary.LittleEndian, wav.sampleRate) // 24
 	if err != nil {
-		return nil
+		return err
 	}
 
 	long = (wav.sampleRate * 32 * int32(wav.numChannels)) / 8
 	err = binary.Write(wav.file, binary.LittleEndian, long) // 28
 	if err != nil {
-		return nil
+		return err
 	}
 
 	short = int16((32 * int32(wav.numChannels)) / 8)
 	err = binary.Write(wav.file, binary.LittleEndian, short) // 32
 	if err != nil {
-		return nil
+		return err
 	}
 
 	short = 32
 	err = binary.Write(wav.file, binary.LittleEndian, short) // 34
 	if err != nil {
-		return nil
+		return err
 	}
 
 	short = 0                                                // size of extension
 	err = binary.Write(wav.file, binary.LittleEndian, short) // 36
 	if err != nil {
-		return nil
+		return err
 	}
 
 	_, err = wav.file.Write([]byte("fact")) // 38
 	if err != nil {
-		return nil
+		return err
 	}
 
 	long = 4
 	err = binary.Write(wav.file, binary.LittleEndian, long) // 42
 	if err != nil {
-		return nil
+		return err
 	}
 
 	long = 0                                                // num sample frames to be overwritten later
 	err = binary.Write(wav.file, binary.LittleEndian, long) // 46
 	if err != nil {
-		return nil
+		return err
 	}
 
 	_, err = wav.file.Write([]byte("data")) // 50
 	if err != nil {
-		return nil
+		return err
 	}
 
 	long = 0                                                // data section size to be overwritten later
 	err = binary.Write(wav.file, binary.LittleEndian, long) // 54
 	if err != nil {
-		return nil
+		return err
 	}
 
 	return nil

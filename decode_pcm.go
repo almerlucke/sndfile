@@ -262,7 +262,7 @@ func parseAIFF(r io.ReaderAt, size int64) (pcmFile, error) {
 			f.layout.numChannels = int(binary.BigEndian.Uint16(b[0:]))
 			frames = binary.BigEndian.Uint32(b[2:])
 			bits := int(binary.BigEndian.Uint16(b[6:]))
-			f.layout.sampleRate = int(math.Round(float80.NewFromBits(binary.BigEndian.Uint16(b[8:]), binary.BigEndian.Uint64(b[10:])).Float64()))
+			f.layout.sampleRate = int(math.Round(float80.NewFromBytes(b[8:18]).Float64()))
 
 			compression := "NONE"
 			if isAIFC {
