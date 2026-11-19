@@ -3,7 +3,6 @@ module github.com/almerlucke/sndfile
 go 1.26.4
 
 require (
-	github.com/dh1tw/gosamplerate v0.1.2
 	github.com/hajimehoshi/go-mp3 v0.3.4
 	github.com/jfreymuth/oggvorbis v1.0.5
 	github.com/mewkiz/flac v1.0.14

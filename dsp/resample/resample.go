@@ -3,6 +3,25 @@
 // The sinc converters use a Kaiser windowed sinc, tabulated once and linearly interpolated, the same method as libsamplerate. When the rate is lowered
 // the filter is stretched so that it low passes below the new Nyquist frequency first, nothing aliases. The converters are numbered like the
 // converters of libsamplerate, so a quality that was a libsamplerate constant keeps its meaning.
+//
+// # Compared with libsamplerate
+//
+// The designs were tuned against libsamplerate 0.2.2 on a sine that is converted and compared with the exact sine at the new rate (error relative to
+// the signal, lower is better), on 44.1 to 48 kHz, 48 to 44.1 kHz, 44.1 to 96 kHz and 96 to 44.1 kHz:
+//
+//	           pure Go          libsamplerate
+//	best       -146 .. -148 dB  -137 .. -144 dB
+//	medium     -130 .. -142 dB  -117 .. -126 dB
+//	fastest    -111 .. -114 dB   -98 .. -103 dB
+//
+// The error of best is at the precision of float32. A tone at 0.45 of the sample rate when the rate is halved comes out at -160 dB (best), against
+// -150 dB. The transition band is as steep: at 1.005 times the Nyquist frequency best is at -152 dB, libsamplerate at -155 dB. The weights of a ratio
+// that is a fraction of small numbers (160/147 for 44.1 to 48 kHz) are made once per phase, and that makes the converter 1.5 to 2 times faster than
+// libsamplerate on an i7-1280P (4 seconds of stereo at best: 80 ms against 159 ms). A ratio that is no small fraction (pi/3) is about 2 times slower
+// (293 ms against 144 ms).
+//
+// The comparison itself (a cgo test with a build tag, that called libsamplerate directly) was removed so that the module does not need libsamplerate
+// or cgo to be tested. It is in the history: git show 6d8726d:dsp/resample/srcompare_test.go and srcompare_cgo.go.
 package resample
 
 import (
