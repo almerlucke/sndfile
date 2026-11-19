@@ -4,10 +4,18 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"github.com/almerlucke/sndfile/writer/backend/aifc/float80"
+	"fmt"
 	"io"
+	"math"
 	"os"
+
+	"github.com/almerlucke/sndfile/writer/backend"
+	"github.com/almerlucke/sndfile/writer/backend/aifc/float80"
 )
+
+// maxSampleBytes is the most bytes of samples an aifc file can hold: the size of the FORM chunk, with the header (100 bytes, with room to spare) and
+// the samples, is 32 bits
+const maxSampleBytes = math.MaxUint32 - 100
 
 const (
 	aifcVersion1        = uint32(0xA2805140)
@@ -34,6 +42,14 @@ type AIFC struct {
 }
 
 func New(filePath string, numChannels int, sampleRate float64) (*AIFC, error) {
+	if numChannels < 1 || numChannels > math.MaxInt16 {
+		return nil, fmt.Errorf("aifc: %d channels, an aifc file has 1 to %d", numChannels, math.MaxInt16)
+	}
+
+	if !(sampleRate > 0) || math.IsInf(sampleRate, 0) {
+		return nil, fmt.Errorf("aifc: sample rate %v out of range", sampleRate)
+	}
+
 	file, err := os.Create(filePath)
 	if err != nil {
 		return nil, err
@@ -356,9 +372,17 @@ func (aifc *AIFC) writeHeader() error {
 }
 
 func (aifc *AIFC) Write(items []float32) error {
-	var buf bytes.Buffer
+	if len(items)%int(aifc.numChannels) != 0 {
+		return fmt.Errorf("aifc: %d samples are not whole frames of %d channels", len(items), aifc.numChannels)
+	}
 
 	numFrames := len(items) / int(aifc.numChannels)
+
+	if (uint64(aifc.numSampleFrames)+uint64(numFrames))*uint64(aifc.numChannels)*4 > maxSampleBytes {
+		return backend.ErrTooLarge
+	}
+
+	var buf bytes.Buffer
 
 	for _, item := range items {
 		_ = binary.Write(&buf, binary.BigEndian, item)

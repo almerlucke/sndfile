@@ -4,9 +4,16 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
+	"math"
 	"os"
+
+	"github.com/almerlucke/sndfile/writer/backend"
 )
+
+// maxSamples is the most samples a wav file can hold: the size of the RIFF chunk (50 bytes more than the samples) is 32 bits
+const maxSamples = (math.MaxUint32 - 50) / 4
 
 type Wav struct {
 	numChannels  int16
@@ -16,6 +23,14 @@ type Wav struct {
 }
 
 func New(filePath string, numChannels int, sampleRate float64) (*Wav, error) {
+	if numChannels < 1 || numChannels > math.MaxInt16 {
+		return nil, fmt.Errorf("wav: %d channels, a wav file has 1 to %d", numChannels, math.MaxInt16)
+	}
+
+	if !(sampleRate >= 1 && sampleRate <= math.MaxInt32) {
+		return nil, fmt.Errorf("wav: sample rate %v out of range", sampleRate)
+	}
+
 	file, err := os.Create(filePath)
 	if err != nil {
 		return nil, err
@@ -284,6 +299,14 @@ func (wav *Wav) Normalize(max float32) error {
 }
 
 func (wav *Wav) Write(items []float32) error {
+	if len(items)%int(wav.numChannels) != 0 {
+		return fmt.Errorf("wav: %d samples are not whole frames of %d channels", len(items), wav.numChannels)
+	}
+
+	if uint64(wav.totalSamples)+uint64(len(items)) > maxSamples {
+		return backend.ErrTooLarge
+	}
+
 	var buf bytes.Buffer
 
 	for _, item := range items {
