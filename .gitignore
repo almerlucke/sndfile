@@ -35,3 +35,9 @@ _testmain.go
 *.aifc
 *.aif
 *.wav
+
+# ...except the test fixtures
+!testdata/*.aiff
+!testdata/*.aifc
+!testdata/*.aif
+!testdata/*.wav
